@@ -7,24 +7,97 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+library(readr)
+library(dplyr)
+library(ggplot2)
 ```
 
-## R Markdown
+## Introduction
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Boris Chen uses a Gaussian Mixture Model to create tiers for players based
+on their Expert Consensus Ranking. 
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+However, let's check if the underlying distribution is actually Gaussian.
 
-```{r cars}
-summary(cars)
+## Data
+
+Pro-Football-Reference.com offers the fantasy scores of the top 580 players 
+using standard scoring. 
+
+The choice of 580 is simply what the website provided. I may look for more data.
+
+```{r data loading}
+df = read.csv("data/years_2015_fantasy_fantasy.csv")
+df = df %>% filter(!is.na(FantPt))
+
+# Just get the QBs
+qbs = df %>% filter(FantPos == "QB")
+rbs = df %>% filter(FantPos == "RB")
+wrs = df %>% filter(FantPos == "WR")
+tes = df %>% filter(FantPos == "TE")
 ```
 
-## Including Plots
+## Histogram of 2015 Fantasy Points
+```{r}
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+From looking at these histograms, the underlying distribution does not appear to
+be a mix of Gaussians. This suggests there may be better ways of clustering 
+the players.
+
+### All players
+```{r}
+# Freedman-Diaconis rule for calculating bin width.
+bw = function(x) diff(range(x)) / (2 * IQR(x) / length(x)^(1/3)) 
+qplot(FantPt, data = df, geom = "histogram", binwidth = bw(df$FantPt))
+```
+
+### Quarterbacks
+Because a team usually only intends to play one QB a game, there are only 67 QBs 
+in this data set. As a result, the QB histogram looks more sparse than the 
+histograms for the other positions.
+```{r}
+qplot(FantPt, data = qbs, geom = "histogram", binwidth = bw(qbs$FantPt))
+```
+
+### Running Backs
+```{r}
+qplot(FantPt, data = rbs, geom = "histogram", binwidth = bw(rbs$FantPt))
+```
+
+### Wide Receivers
+```{r}
+qplot(FantPt, data = wrs, geom = "histogram", binwidth = bw(wrs$FantPt))
+```
+
+### Tight Ends
+```{r}
+qplot(FantPt, data = tes, geom = "histogram", binwidth = bw(tes$FantPt))
+```
+
+## Improvements
+
+### Idea 1: Gaussian Mixture Model on projections
+
+### Idea 2: K-means on projections
+Inspired by this: https://saurabhrane.shinyapps.io/tiers/ https://seelio.com/w/1qdf/k_means-visualization-of-fantasy-football-rankings
+
+
+## Evaluation
+I need to compare my techniques with Boris's.
+
+Boris has published tiers for the 2013-2015 seasons, so if I want to go back
+further, I will need to compute them. Furthermore, his tiers are simply images
+of the plots, so it's probably easier if I just run his code to perform the 
+calculations.
+
+ECR is calculated by FantasyPros.com and only 2015 season rankings are 
+available on their website. Using the Wayback Machine, I will scrape rankings
+for previous seasons.
+
+Accuracy of a tier will be defined as % time the higher tier ends up scoring 
+more than a lower tier. I will compute this for the 2013 season and validate
+the results by checking against Boris's post: 
+http://www.borischen.co/2014/02/a-2013-season-retrospective.html

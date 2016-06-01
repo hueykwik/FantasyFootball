@@ -11,6 +11,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(readr)
 library(dplyr)
 library(ggplot2)
+library(mclust)
+library(gsubfn)
 ```
 
 ## Introduction
@@ -28,7 +30,7 @@ using standard scoring.
 The choice of 580 is simply what the website provided. I may look for more data.
 
 ```{r data loading}
-df = read.csv("data/years_2015_fantasy_fantasy.csv")
+df = read.csv("data/2015/years_2015_fantasy_fantasy.csv")
 df = df %>% filter(!is.na(FantPt))
 
 # Just get the QBs
@@ -39,10 +41,6 @@ tes = df %>% filter(FantPos == "TE")
 ```
 
 ## Histogram of 2015 Fantasy Points
-```{r}
-
-```
-
 From looking at these histograms, the underlying distribution does not appear to
 be a mix of Gaussians. This suggests there may be better ways of clustering 
 the players.
@@ -60,30 +58,212 @@ in this data set. As a result, the QB histogram looks more sparse than the
 histograms for the other positions.
 ```{r}
 qplot(FantPt, data = qbs, geom = "histogram", binwidth = bw(qbs$FantPt))
+qplot(FantPt, data = qbs[1:24, ], geom = "histogram", binwidth = bw(qbs$FantPt))
 ```
+
+
 
 ### Running Backs
 ```{r}
 qplot(FantPt, data = rbs, geom = "histogram", binwidth = bw(rbs$FantPt))
+qplot(FantPt, data = rbs[1:40, ], geom = "histogram", binwidth = bw(qbs$FantPt))
 ```
 
 ### Wide Receivers
 ```{r}
 qplot(FantPt, data = wrs, geom = "histogram", binwidth = bw(wrs$FantPt))
+qplot(FantPt, data = wrs[1:60, ], geom = "histogram", binwidth = bw(wrs$FantPt))
 ```
 
 ### Tight Ends
 ```{r}
 qplot(FantPt, data = tes, geom = "histogram", binwidth = bw(tes$FantPt))
+qplot(FantPt, data = tes[1:24, ], geom = "histogram", binwidth = bw(tes$FantPt))
 ```
+
+
+## Data Sources
+
+Sources:
+
+* Projected scores come from Fantasy Football Analytics: apps.fantasyfootballanalytics.net/projections
+  * The projected scores for each week are the average of the scores from CBS Average, ESPN, FantasyFootball Nerd, FantasySharks, FFToday, NFL
+   NumberFire, YahooSports
+  * Scoring system was standard scoring from Yahoo.
+* ECR came from FantasyPros. I used a modified version of Boris Chen's code to download the data.
+
+```{r downloadECR}
+pos.list = c('qb','rb','wr','te','k','dst')
+
+download.data = function(week, pos.list) {
+  for (mp in pos.list) {
+ 	 	# Remove old data files.
+    rmold1 = paste('rm data/2015/week-', week, '-',mp,'-raw.xls', sep='')
+  	system(rmold1)
+  	
+  	urlStr = fn$identity("http://www.fantasypros.com/nfl/rankings/`mp`.php?week=`week`&export=xls")
+  	dlPath = fn$identity("data/2015/week-`week`-`mp`-raw.xls")
+  	
+	  rmold2 = paste('rm ~ data/2015/week_', week, '_', mp, '.tsv', sep='')
+  	system(rmold2)
+    download.file(urlStr, destfile=dlPath)  
+    sedstr = paste("sed '1,4d' data/2015/week-", week, '-',mp,'-raw.xls', 
+  			  ' > data/2015/week_', week, '_', mp, '.tsv',sep="")
+    system(sedstr)
+  }	  
+}
+
+# TODO(huey): Error when trying to download using knitr, but works otherwise.
+sapply(1:17, function(week) download.data(week))
+
+```
+
+## Computing Tiers based on ECR
+
+I wrote some code to replicate Chen's work for Week 17. 
+
+Notes:
+* Not all players are looked at, just the top listed in `cutoffs` below.
+* Number of tiers are not calculated automatically. 
+
+```{r}
+
+cutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
+tiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
+
+# Load Week 17 since that's published
+ecr_df = read_tsv("data/2015/week_17_qb.tsv")
+ecr_df = ecr_df[1:cutoffs["QB"], ]
+names(ecr_df) = make.names(names(ecr_df))
+
+# Calculate tiers based on his code
+kNumClusters = 8
+fit = Mclust(ecr_df$Avg.Rank, G = kNumClusters)
+ecr_df$TierECR = factor(fit$classification)
+ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
+
+# Calculate position rank, negative so lowest rank will be on top in the plot
+# below
+ecr_df$position.rank = -seq(nrow(ecr_df))
+
+# Plot it, eyeball what looks good
+# Tweak fonts
+# Scatterplot with position rank on x and average rank on y
+font = 3.5
+barsize = 1.5  
+dotsize = 2  
+
+# We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
+# coordinates.
+p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
+p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierECR), size=barsize*0.8, alpha=0.4)
+p = p + coord_flip()
+p = p + geom_text(aes(label=Player.Name, colour=TierECR, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
+p = p + scale_x_continuous("Expert Consensus Rank")
+p = p + ylab("Average Expert Rank")
+p
+
+# If this works reasonably well, then record my tiers in a file
+
+
+```
+
 
 ## Improvements
 
-### Idea 1: Gaussian Mixture Model on projections
+We're going to try a couple things:
 
-### Idea 2: K-means on projections
-Inspired by this: https://saurabhrane.shinyapps.io/tiers/ https://seelio.com/w/1qdf/k_means-visualization-of-fantasy-football-rankings
+* Compute a Gaussian Mixture Model on the projected scores
+* Come up with Tiering that maximizes accuracy
 
+```{r integrate_data}
+
+kCutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
+kTiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
+
+full_df = data.frame()
+for (week in seq(17)) {
+  print(week)
+  
+  # Parser warnings are due to trailing comma at the end of each row
+  sdf = read_csv(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
+  sdf$Week = week
+  sdf$TierProj = NA
+  sdf$TierECR = NA
+  
+  for (pos in toupper(pos.list)) {
+    print(pos)
+    
+    ## Calculate TierProj
+    pos_df = sdf %>% filter(position == pos)
+    
+    # TODO(huey): Only do tiers for the top players -- need to get the top players by fantasy points
+    pos_df = pos_df[1:kCutoffs[pos], ]
+    proj_fit = Mclust(pos_df$points, G = kTiers[pos])
+    n_clusters = length(unique(proj_fit$classification))
+    
+    pos_df$TierProj = factor(proj_fit$classification)
+    levels(pos_df$TierProj) = rev(levels(pos_df$TierProj))
+    levels(pos_df$TierProj) = n_clusters:1
+    
+    sdf[sdf$position == pos, ]$TierProj[1:kCutoffs[pos]] = pos_df$TierProj  
+    
+    ## Calculate TierECR
+      
+    # Load ECR data for the week
+    ecr_df = read_tsv(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
+    ecr_df = ecr_df[1:cutoffs[pos], ]  # TODO(huey): Need to only get the top players, need to do an order by
+    names(ecr_df) = make.names(names(ecr_df))
+      
+    # Calculate tiers based on average rank
+    fit = Mclust(ecr_df$Avg.Rank, G = kTiers[pos])
+    ecr_df$TierECR = factor(fit$classification)
+    
+    sdf[sdf$position == pos, ]$TierECR[1:kCutoffs[pos]] = ecr_df$TierECR    
+    ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
+      
+    # Calculate position rank, negative so lowest rank will be on top in the plot
+    # below
+    ecr_df$position.rank = -seq(nrow(ecr_df))
+      
+    # Plot it, eyeball what looks good
+    # Tweak fonts
+    # Scatterplot with position rank on x and average rank on y
+    font = 3.5
+    barsize = 1.5  
+    dotsize = 2  
+      
+    # We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
+    # coordinates.
+    p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
+    p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierECR), size=barsize*0.8, alpha=0.4)
+    p = p + coord_flip()
+    p = p + geom_text(aes(label=Player.Name, colour=TierECR, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
+    p = p + scale_x_continuous("Expert Consensus Rank")
+    p = p + ylab("Average Expert Rank")
+    p
+    
+    # Output the plots somewhere so I can look at them
+  }
+  
+  full_df = rbind(full_df, sdf)
+}
+
+full_df = full_df %>% select(-player, -cost, -salary, -adp, -adpdiff, -auctionValue, -overallECR, -sleeper)
+```
+
+
+### Idea 2: Grid search
+Example: Suppose I was trying to separate RBs into two tiers, where would I draw the line?
+- I could do essentialy binary search, say the range is 0-400 projected points
+- Draw the line at 200
+- Cost function -> accuracy mentioned below
+
+Generalize for k 
+
+### Other ideas?
+- Andrew: start with a Bayesian prior over how one expects "player quality" to
+  be distributed
 
 ## Evaluation
 I need to compare my techniques with Boris's.
@@ -97,7 +277,25 @@ ECR is calculated by FantasyPros.com and only 2015 season rankings are
 available on their website. Using the Wayback Machine, I will scrape rankings
 for previous seasons.
 
+Super ugh! Boris's published stuff only shows Week 17, so I can check against
+that for now. Then again, I have his source code, so I could run against that.
+
 Accuracy of a tier will be defined as % time the higher tier ends up scoring 
 more than a lower tier. I will compute this for the 2013 season and validate
 the results by checking against Boris's post: 
 http://www.borischen.co/2014/02/a-2013-season-retrospective.html
+
+## Questions for Jonah/Andrew
+- Right direction or wrong direction?
+  - Should my goal be to try to come up with a better clustering? Should it be something else?
+- How could I apply a Bayesian prior to this problem, per Andrew's email
+
+## Notes
+- It's not clear that there really are tiers of players, especially from looking at the distribution.
+- With that said, people like tiers, so it may still be worth trying to improve on this.
+- You can transform a skewed distribution into a normal distribution via Box-Cox. 
+-- Why useful? When doing linear models, there is an implicit assumption that the underlying
+is normally distributed. Example: predict log(income) instead income and then exponentiate it later.
+
+- Andrew: start with a Bayesian prior over how one expects "player quality" to
+  be distributed --> key point is predict points based on rankings

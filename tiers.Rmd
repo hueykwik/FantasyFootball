@@ -14,6 +14,8 @@ library(ggplot2)
 library(mclust)
 library(gsubfn)
 library(XML)
+
+source("util.R")
 ```
 
 ## Introduction
@@ -237,8 +239,12 @@ so I used the Wayback Machine to grab whatever rankings I could for that season.
 # Load in ECR
 week_13_ecr = read_csv("data/2013/week_13_qb.csv")
 # Clean up the player column so join will work
-
-# Create tiers
+names(week_13_ecr) = c("Rank", "Player", "Best", "Worst", "Ave", "StdDev")
+week_13_ecr$Player = sapply(week_13_ecr$Player, function(name) {
+  Encoding(name) = "latin1"  # Was Unicode before
+  name = unlist(strsplit(name, "(", fixed = TRUE))[1]
+  trim(name)
+})
 
 # Load in Scores
 week_13_scores = read_csv("data/2013/FFToday-Week-1-QB.csv")
@@ -246,8 +252,8 @@ week_13_scores = read_csv("data/2013/FFToday-Week-1-QB.csv")
 week_13_scores$player = sapply(week_13_scores$player, function(name) { 
   Encoding(name) = "latin1"  # Was Unicode before
   name = unlist(strsplit(name, ".", fixed = TRUE))[2]
-  trimws(name, which = "left")
-  })
+  trim(name)
+})
 
 ```
 

@@ -13,6 +13,7 @@ library(dplyr)
 library(ggplot2)
 library(mclust)
 library(gsubfn)
+library(XML)
 ```
 
 ## Introduction
@@ -216,24 +217,40 @@ Generalize for k
   be distributed
 
 ## Evaluation
-I need to compare my techniques with Boris's.
-
-Boris has published tiers for the 2013-2015 seasons, so if I want to go back
-further, I will need to compute them. Furthermore, his tiers are simply images
-of the plots, so it's probably easier if I just run his code to perform the 
-calculations.
-
-ECR is calculated by FantasyPros.com and only 2015 season rankings are 
-available on their website. Using the Wayback Machine, I will scrape rankings
-for previous seasons.
-
-Super ugh! Boris's published stuff only shows Week 17, so I can check against
-that for now. Then again, I have his source code, so I could run against that.
-
 Accuracy of a tier will be defined as % time the higher tier ends up scoring 
-more than a lower tier. I will compute this for the 2013 season and validate
-the results by checking against Boris's post: 
+more than a lower tier. Chen produced a summary of accuracy for the 2013 season:
 http://www.borischen.co/2014/02/a-2013-season-retrospective.html
+
+First goal is to compute accuracy myself and then check against the tiers 
+for the 2013 season. Unfortunately, Chen's the complete listing of tiers is 
+no longer available on NYTimes nor his website. 
+
+Even more unfortunate is that FantasyPros does not post their historical rankings,
+so I used the Wayback Machine to grab whatever rankings I could for that season.
+
+```{r compute accuracy}
+
+# Get ECR for 2013 Week 13 QB
+# Get fantasy scores for 2013 Week 13 QB, scoring system Yahoo!
+# http://fftoday.com/stats/playerstats.php?Season=2013&GameWeek=13&PosID=10&LeagueID=17
+
+# Load in ECR
+week_13_ecr = read_csv("data/2013/week_13_qb.csv")
+# Clean up the player column so join will work
+
+# Create tiers
+
+# Load in Scores
+week_13_scores = read_csv("data/2013/FFToday-Week-1-QB.csv")
+# Remove the "1." from "1. Peyton Manning""
+week_13_scores$player = sapply(week_13_scores$player, function(name) { 
+  Encoding(name) = "latin1"  # Was Unicode before
+  name = unlist(strsplit(name, ".", fixed = TRUE))[2]
+  trimws(name, which = "left")
+  })
+
+```
+
 
 ## Questions for Jonah/Andrew
 - Right direction or wrong direction?

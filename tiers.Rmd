@@ -114,7 +114,7 @@ download.data = function(week, pos.list) {
 }
 
 # TODO(huey): Error when trying to download using knitr, but works otherwise.
-sapply(1:17, function(week) download.data(week))
+# sapply(1:17, function(week) download.data(week))
 
 ```
 
@@ -125,13 +125,13 @@ We're going to try a couple things:
 * Compute a Gaussian Mixture Model on the projected scores
 * Come up with Tiering that maximizes accuracy
 
-```{r integrate_data}
+```{r integrate_data, warning = FALSE}
 kYear = 2015
 kCutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
 kTiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
 
 for (week in seq(17)) {
-  print(paste("Week: ", week))
+  # print(paste("Week: ", week))
   
   # Parser warnings are due to trailing comma at the end of each row
   sdf = read_csv(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
@@ -140,7 +140,7 @@ for (week in seq(17)) {
   sdf$TierECR = NA
   
   for (pos in toupper(pos.list)) {
-    print(paste("Position: ", pos))
+    # print(paste("Position: ", pos))
     
     ## Calculate TierProj
     pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos])

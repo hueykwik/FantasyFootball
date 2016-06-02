@@ -118,57 +118,6 @@ sapply(1:17, function(week) download.data(week))
 
 ```
 
-## Computing Tiers based on ECR
-
-I wrote some code to replicate Chen's work for Week 17. 
-
-Notes:
-* Not all players are looked at, just the top listed in `cutoffs` below.
-* Number of tiers are not calculated automatically. 
-
-```{r}
-
-cutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
-tiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
-
-# Load Week 17 since that's published
-ecr_df = read_tsv("data/2015/week_17_qb.tsv")
-ecr_df = ecr_df[1:cutoffs["QB"], ]
-names(ecr_df) = make.names(names(ecr_df))
-
-# Calculate tiers based on his code
-kNumClusters = 8
-fit = Mclust(ecr_df$Avg.Rank, G = kNumClusters)
-ecr_df$TierECR = factor(fit$classification)
-ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
-
-# Calculate position rank, negative so lowest rank will be on top in the plot
-# below
-ecr_df$position.rank = -seq(nrow(ecr_df))
-
-# Plot it, eyeball what looks good
-# Tweak fonts
-# Scatterplot with position rank on x and average rank on y
-font = 3.5
-barsize = 1.5  
-dotsize = 2  
-
-# We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
-# coordinates.
-p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
-p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierECR), size=barsize*0.8, alpha=0.4)
-p = p + coord_flip()
-p = p + geom_text(aes(label=Player.Name, colour=TierECR, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
-p = p + scale_x_continuous("Expert Consensus Rank")
-p = p + ylab("Average Expert Rank")
-p
-
-# If this works reasonably well, then record my tiers in a file
-
-
-```
-
-
 ## Improvements
 
 We're going to try a couple things:
@@ -177,13 +126,12 @@ We're going to try a couple things:
 * Come up with Tiering that maximizes accuracy
 
 ```{r integrate_data}
-
+kYear = 2015
 kCutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
 kTiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
 
-full_df = data.frame()
 for (week in seq(17)) {
-  print(week)
+  print(paste("Week: ", week))
   
   # Parser warnings are due to trailing comma at the end of each row
   sdf = read_csv(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
@@ -192,34 +140,36 @@ for (week in seq(17)) {
   sdf$TierECR = NA
   
   for (pos in toupper(pos.list)) {
-    print(pos)
+    print(paste("Position: ", pos))
     
     ## Calculate TierProj
-    pos_df = sdf %>% filter(position == pos)
+    pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos])
     
-    # TODO(huey): Only do tiers for the top players -- need to get the top players by fantasy points
-    pos_df = pos_df[1:kCutoffs[pos], ]
     proj_fit = Mclust(pos_df$points, G = kTiers[pos])
     n_clusters = length(unique(proj_fit$classification))
+    
+    # Sometimes the model isn't able to fit K clusters
+    k = kTiers[pos] - 1
+    while (n_clusters == 0) {
+      proj_fit = Mclust(pos_df$points, G = k)
+      n_clusters = length(unique(proj_fit$classification))
+      k = k - 1
+    }
     
     pos_df$TierProj = factor(proj_fit$classification)
     levels(pos_df$TierProj) = rev(levels(pos_df$TierProj))
     levels(pos_df$TierProj) = n_clusters:1
     
-    sdf[sdf$position == pos, ]$TierProj[1:kCutoffs[pos]] = pos_df$TierProj  
-    
     ## Calculate TierECR
       
     # Load ECR data for the week
     ecr_df = read_tsv(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
-    ecr_df = ecr_df[1:cutoffs[pos], ]  # TODO(huey): Need to only get the top players, need to do an order by
+    ecr_df = ecr_df[1:kCutoffs[pos], ]  # The data is ordered from best rank to worst rank  
     names(ecr_df) = make.names(names(ecr_df))
       
     # Calculate tiers based on average rank
     fit = Mclust(ecr_df$Avg.Rank, G = kTiers[pos])
     ecr_df$TierECR = factor(fit$classification)
-    
-    sdf[sdf$position == pos, ]$TierECR[1:kCutoffs[pos]] = ecr_df$TierECR    
     ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
       
     # Calculate position rank, negative so lowest rank will be on top in the plot
@@ -241,15 +191,15 @@ for (week in seq(17)) {
     p = p + geom_text(aes(label=Player.Name, colour=TierECR, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
     p = p + scale_x_continuous("Expert Consensus Rank")
     p = p + ylab("Average Expert Rank")
-    p
+    #p
     
     # Output the plots somewhere so I can look at them
+    out_dir = fn$identity("out/`kYear`/week`week`/png/")
+    out_path = fn$identity("`out_dir`week-`week`-`pos`.png")
+    dir.create(out_dir, recursive = TRUE)
+    ggsave(file = out_path, width = 9.5, height = 8, dpi = 150)
   }
-  
-  full_df = rbind(full_df, sdf)
 }
-
-full_df = full_df %>% select(-player, -cost, -salary, -adp, -adpdiff, -auctionValue, -overallECR, -sleeper)
 ```
 
 

@@ -139,13 +139,13 @@ tier_ecr_accuracy = data.frame()
 tier_proj_accuracy = data.frame()
 
 for (week in seq(17)) {
-  # print(paste("Week: ", week))
+  print(paste("Week: ", week))
   
   # Parser warnings are due to trailing comma at the end of each row
   sdf = read_csv(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
   sdf$Week = week
-  #sdf$TierProj = NA
-  #sdf$TierECR = NA
+  sdf$actualPoints = as.numeric(sdf$actualPoints)
+  sdf$actualPoints[is.na(sdf$actualPoints)] = 0
   
   week_tier_ecr_accuracy = c()
   week_tier_proj_accuracy = c()
@@ -167,6 +167,7 @@ for (week in seq(17)) {
       k = k - 1
     }
     
+    # Reversing so that highest projected points gets Tier 1 
     pos_df$TierProj = factor(proj_fit$classification)
     levels(pos_df$TierProj) = rev(levels(pos_df$TierProj))
     levels(pos_df$TierProj) = n_clusters:1
@@ -181,6 +182,7 @@ for (week in seq(17)) {
     # Calculate tiers based on average rank
     fit = Mclust(ecr_df$Avg.Rank, G = kTiers[pos])
     ecr_df$TierECR = factor(fit$classification)
+    levels(ecr_df$TierECR) = 1:length(unique(fit$classification))
     ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
       
     # Calculate position rank, negative so lowest rank will be on top in the plot
@@ -213,23 +215,22 @@ for (week in seq(17)) {
       ecr_scores = inner_join(ecr_df, all_pos_df, by = c("Player.Name" = "playername"))
     }
     
-    week_tier_proj_accuracy  = c(week_tier_proj_accuracy, computeAccuracy(pos_df$actualPoints, as.numeric(pos_df$TierProj)))
-    week_tier_ecr_accuracy = c(week_tier_ecr_accuracy, computeAccuracy(ecr_scores$actualPoints, as.numeric(ecr_scores$TierECR)))
+    acc = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
+    acc_ecr = computeAccuracy(ecr_scores$actualPoints, ecr_scores$TierECR)
+    
+    week_tier_proj_accuracy  = c(week_tier_proj_accuracy, acc)
+    week_tier_ecr_accuracy = c(week_tier_ecr_accuracy, acc_ecr)
   }
+
   tier_proj_accuracy = rbind(tier_proj_accuracy, week_tier_proj_accuracy)
   tier_ecr_accuracy = rbind(tier_ecr_accuracy, week_tier_ecr_accuracy)
-  
-  select(pos_df, playername, TierProj, actualPoints)
-  select(ecr_scores, Player.Name, TierECR, actualPoints)
-  
+
   names(tier_proj_accuracy) = pos.list
   names(tier_ecr_accuracy) = pos.list
   
   mean_proj = sapply(tier_proj_accuracy, mean)
   mean_tier = sapply(tier_ecr_accuracy, mean)
 }
-
-computeAccuracy(as.numeric(pos_df$actualPoints), as.numeric(pos_df$TierProj))
 ```
 
 
@@ -314,6 +315,8 @@ computeAccuracy = function(scores, tiers) {
   
   return(n_correct / n_comparisons)
 }
+
+
 
 computeAccuracy(ecr_scores$FPts, ecr_scores$TierECR)
 

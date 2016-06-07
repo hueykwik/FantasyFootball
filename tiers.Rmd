@@ -32,78 +32,38 @@ dotsize = 2
 
 ## Introduction
 
-Boris Chen uses a Gaussian Mixture Model to create tiers for players based
-on their Expert Consensus Ranking. 
+A couple years ago, I encountered a [New York Times article](http://nyti.ms/1t6Bgc3) 
+by Boris Chen that explained a way to use machine learning to improve your starting lineup 
+in fantasy football. 
 
-However, let's check if the underlying distribution is actually Gaussian.
+Every week, legions of fantasy football experts come up with their lists of player
+rankings. [FantasyPros](https://www.fantasypros.com/) aggregates these and comes up with an Expert Conensus Ranking. 
+Chen applies a [Gaussian mixture model](http://bit.ly/1VKWt6S) to the rankings, 
+which produces tiers of similarly ranked players. 
 
-## Data
+The tiers lend themselves to easier decision-making. For instance, one should draft
+players in higher tiers versus other popular tactics, e.g. filling a specific position
+early.
 
-Pro-Football-Reference.com offers the fantasy scores of the top 580 players 
-using standard scoring. 
+In this project, I show that we can improve upon these tiers by clustering based
+on projected points instead of ECR. When run against the 2015 season data, my 
+technique seems to perform better.
 
-The choice of 580 is simply what the website provided. I may look for more data.
+## Grabbing Data
 
-```{r data loading}
-df = read.csv("data/2015/years_2015_fantasy_fantasy.csv")
-df = df %>% filter(!is.na(FantPt))
+In order to do this project, I needed the following data for the 2015 season:
 
-# Just get the QBs
-qbs = df %>% filter(FantPos == "QB")
-rbs = df %>% filter(FantPos == "RB")
-wrs = df %>% filter(FantPos == "WR")
-tes = df %>% filter(FantPos == "TE")
-```
+* Projected and actual scores from [Fantasy Football Analytics](apps.fantasyfootballanalytics.net/projections)
+* Expert Consensus Rankings from FantasyPros.
 
-## Histogram of 2015 Fantasy Points
-From looking at these histograms, the underlying distribution does not appear to
-be a mix of Gaussians. This suggests there may be better ways of clustering 
-the players.
+The projected scores for each week are the average of the scores from CBS, ESPN,
+FantasyFootball Nerd, FantasySharks, FFToday, NFL NumberFire, and YahooSports. 
+I used Yahoo! standard scoring.
 
-### All players
-```{r}
-qplot(FantPt, data = df, geom = "histogram", binwidth = bw(df$FantPt))
-```
+I wrote a modified version of [Chen's code](https://github.com/borisachen/fftiers) 
+to download the ECR data:
 
-### Quarterbacks
-Because a team usually only intends to play one QB a game, there are only 67 QBs 
-in this data set. As a result, the QB histogram looks more sparse than the 
-histograms for the other positions.
-```{r}
-qplot(FantPt, data = qbs, geom = "histogram", binwidth = bw(qbs$FantPt))
-qplot(FantPt, data = qbs[1:24, ], geom = "histogram", binwidth = bw(qbs$FantPt))
-```
-
-### Running Backs
-```{r}
-qplot(FantPt, data = rbs, geom = "histogram", binwidth = bw(rbs$FantPt))
-qplot(FantPt, data = rbs[1:40, ], geom = "histogram", binwidth = bw(qbs$FantPt))
-```
-
-### Wide Receivers
-```{r}
-qplot(FantPt, data = wrs, geom = "histogram", binwidth = bw(wrs$FantPt))
-qplot(FantPt, data = wrs[1:60, ], geom = "histogram", binwidth = bw(wrs$FantPt))
-```
-
-### Tight Ends
-```{r}
-qplot(FantPt, data = tes, geom = "histogram", binwidth = bw(tes$FantPt))
-qplot(FantPt, data = tes[1:24, ], geom = "histogram", binwidth = bw(tes$FantPt))
-```
-
-
-## Data Sources
-
-Sources:
-
-* Projected scores come from Fantasy Football Analytics: apps.fantasyfootballanalytics.net/projections
-  * The projected scores for each week are the average of the scores from CBS Average, ESPN, FantasyFootball Nerd, FantasySharks, FFToday, NFL
-   NumberFire, YahooSports
-  * Scoring system was standard scoring from Yahoo.
-* ECR came from FantasyPros. I used a modified version of Boris Chen's code to download the data.
-
-```{r downloadECR}
+```{r download ECR}
 download.data = function(week, pos.list) {
   for (mp in pos.list) {
  	 	# Remove old data files.
@@ -124,23 +84,55 @@ download.data = function(week, pos.list) {
 
 # TODO(huey): Error when trying to download using knitr, but works otherwise.
 # sapply(1:17, function(week) download.data(week))
-
 ```
 
-## Improvements
+## Evaluating Accuracy
 
-We're going to try a couple things:
+Accuracy of a tier is defined as the percentage of time a higher tier results
+in a higher median score than a lower tier.
 
-* Compute a Gaussian Mixture Model on the projected scores
-* Come up with Tiering that maximizes accuracy
+```{r}
+computeAccuracy = function(scores, tiers) {
+  n_tiers = length(unique(tiers))
+  n_correct = 0
+  n_comparisons = 0
+  
+  medians = c()
+  for (i in seq(n_tiers)) {
+    median = median(scores[tiers == i])
+    medians = c(medians, median)
+  }
+  
+  for (i in seq(n_tiers-1)) {
+    curr_median = medians[i]
+    below_medians = medians[(i+1):n_tiers]
+  
+    comparisons = sapply(below_medians, function(x) curr_median > x)
+  
+    n_correct = n_correct + sum(comparisons)
+    n_comparisons = n_comparisons + length(comparisons)
+  }
+  
+  return(n_correct / n_comparisons)
+}
+```
+
+# Computing Tiers
+Here I compare clusters generated from ECR to those generated from projections.
+
+Caveats
+
+* TierECR doesn't match Chen's completely. 
+  * This is because his site only the latest
+set of tiers, i.e. Week 17. 
+  * He also uses visual inspection to determine the number of clusters and will
+  change them each week (he publishes a new set of tiers each week)
 
 ```{r integrate_data, warning = FALSE}
 tier_ecr_accuracy = data.frame()
 tier_proj_accuracy = data.frame()
 
 for (week in seq(17)) {
-  print(paste("Week: ", week))
-  
   # Parser warnings are due to trailing comma at the end of each row
   sdf = read_csv(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
   sdf$Week = week
@@ -225,12 +217,25 @@ for (week in seq(17)) {
   tier_proj_accuracy = rbind(tier_proj_accuracy, week_tier_proj_accuracy)
   tier_ecr_accuracy = rbind(tier_ecr_accuracy, week_tier_ecr_accuracy)
 
-  names(tier_proj_accuracy) = pos.list
-  names(tier_ecr_accuracy) = pos.list
-  
+  names(tier_proj_accuracy) = toupper(pos.list)
+  names(tier_ecr_accuracy) = toupper(pos.list)
+}
+```
+
+# Results
+
+It appears that clustering based off of projections performs slightly better.
+
+```{r}
+  round(tier_proj_accuracy * 100, 1)
+
+  round(tier_ecr_accuracy * 100, 1)
+
   mean_proj = sapply(tier_proj_accuracy, mean)
   mean_tier = sapply(tier_ecr_accuracy, mean)
-}
+  
+  round(mean_proj * 100, 1)
+  round(mean_tier * 100, 1)
 ```
 
 
@@ -242,91 +247,7 @@ Example: Suppose I was trying to separate RBs into two tiers, where would I draw
 
 Generalize for k 
 
-### Other ideas?
-- Andrew: start with a Bayesian prior over how one expects "player quality" to
-  be distributed
 
-## Evaluation
-Accuracy of a tier will be defined as % time the higher tier ends up scoring 
-more than a lower tier. Chen produced a summary of accuracy for the 2013 season:
-http://www.borischen.co/2014/02/a-2013-season-retrospective.html
-
-First goal is to compute accuracy myself and then check against the tiers 
-for the 2013 season. Unfortunately, Chen's the complete listing of tiers is 
-no longer available on NYTimes nor his website. 
-
-Even more unfortunate is that FantasyPros does not post their historical rankings,
-so I used the Wayback Machine to grab whatever rankings I could for that season.
-
-```{r compute accuracy}
-
-# Get ECR for 2013 Week 13 QB
-# Get fantasy scores for 2013 Week 13 QB, scoring system Yahoo!
-# http://fftoday.com/stats/playerstats.php?Season=2013&GameWeek=13&PosID=10&LeagueID=17
-
-# Load in ECR
-week_13_ecr = read_csv("data/2013/week_13_qb.csv")
-# Clean up the player column so join will work
-names(week_13_ecr) = c("Rank", "Player", "Best", "Worst", "Ave", "StdDev")
-week_13_ecr$Player = sapply(week_13_ecr$Player, function(name) {
-  Encoding(name) = "latin1"  # Was Unicode before
-  name = unlist(strsplit(name, "(", fixed = TRUE))[1]
-  trim(name)
-})
-
-# Load in Scores
-week_13_scores = read_csv("data/2013/FFToday-Week-1-QB.csv")
-# Remove the "1." from "1. Peyton Manning""
-week_13_scores$player = sapply(week_13_scores$player, function(name) { 
-  Encoding(name) = "latin1"  # Was Unicode before
-  name = unlist(strsplit(name, ".", fixed = TRUE))[2]
-  trim(name)
-})
-names(week_13_scores)[9] = "Rush"
-names(week_13_scores)[10] = "RushYard"
-names(week_13_scores)[11] = "RushTD"
-
-ecr_scores = inner_join(week_13_ecr, week_13_scores, by = c("Player" = "player"))
-tier_ecr = Mclust(ecr_scores$Ave, G = kTiers["QB"])
-ecr_scores$TierECR = tier_ecr$class
-
-# Compute accuracy
-
-computeAccuracy = function(scores, tiers) {
-  n_tiers = length(unique(tiers))
-  n_correct = 0
-  n_comparisons = 0
-  
-  medians = c()
-  for (i in seq(n_tiers)) {
-    median = median(scores[tiers == i])
-    medians = c(medians, median)
-  }
-  
-  for (i in seq(n_tiers-1)) {
-    curr_median = medians[i]
-    below_medians = medians[(i+1):n_tiers]
-  
-    comparisons = sapply(below_medians, function(x) curr_median > x)
-  
-    n_correct = n_correct + sum(comparisons)
-    n_comparisons = n_comparisons + length(comparisons)
-  }
-  
-  return(n_correct / n_comparisons)
-}
-
-
-
-computeAccuracy(ecr_scores$FPts, ecr_scores$TierECR)
-
-week_10 = read_delim("data/2013/week-10-qb-tiers-points", delim = " ")
-computeAccuracy(week_10$points, week_10$tier)
-
-tiers = c(1,2,3,4,5)
-medians = c(27.6, 23.9, 14, 16.7, 8.9)
-
-computeAccuracy(medians, tiers)
 ```
 
 

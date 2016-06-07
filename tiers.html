@@ -308,11 +308,59 @@ for (week in seq(17)) {
 </div>
 <div id="evaluation" class="section level2">
 <h2>Evaluation</h2>
-<p>I need to compare my techniques with Boris’s.</p>
-<p>Boris has published tiers for the 2013-2015 seasons, so if I want to go back further, I will need to compute them. Furthermore, his tiers are simply images of the plots, so it’s probably easier if I just run his code to perform the calculations.</p>
-<p>ECR is calculated by FantasyPros.com and only 2015 season rankings are available on their website. Using the Wayback Machine, I will scrape rankings for previous seasons.</p>
-<p>Super ugh! Boris’s published stuff only shows Week 17, so I can check against that for now. Then again, I have his source code, so I could run against that.</p>
-<p>Accuracy of a tier will be defined as % time the higher tier ends up scoring more than a lower tier. I will compute this for the 2013 season and validate the results by checking against Boris’s post: <a href="http://www.borischen.co/2014/02/a-2013-season-retrospective.html" class="uri">http://www.borischen.co/2014/02/a-2013-season-retrospective.html</a></p>
+<p>Accuracy of a tier will be defined as % time the higher tier ends up scoring more than a lower tier. Chen produced a summary of accuracy for the 2013 season: <a href="http://www.borischen.co/2014/02/a-2013-season-retrospective.html" class="uri">http://www.borischen.co/2014/02/a-2013-season-retrospective.html</a></p>
+<p>First goal is to compute accuracy myself and then check against the tiers for the 2013 season. Unfortunately, Chen’s the complete listing of tiers is no longer available on NYTimes nor his website.</p>
+<p>Even more unfortunate is that FantasyPros does not post their historical rankings, so I used the Wayback Machine to grab whatever rankings I could for that season.</p>
+<pre class="r"><code># Get ECR for 2013 Week 13 QB
+# Get fantasy scores for 2013 Week 13 QB, scoring system Yahoo!
+# http://fftoday.com/stats/playerstats.php?Season=2013&amp;GameWeek=13&amp;PosID=10&amp;LeagueID=17
+
+# Load in ECR
+week_13_ecr = read_csv(&quot;data/2013/week_13_qb.csv&quot;)
+# Clean up the player column so join will work
+names(week_13_ecr) = c(&quot;Rank&quot;, &quot;Player&quot;, &quot;Best&quot;, &quot;Worst&quot;, &quot;Ave&quot;, &quot;StdDev&quot;)
+week_13_ecr$Player = sapply(week_13_ecr$Player, function(name) {
+  Encoding(name) = &quot;latin1&quot;  # Was Unicode before
+  name = unlist(strsplit(name, &quot;(&quot;, fixed = TRUE))[1]
+  trim(name)
+})
+
+# Load in Scores
+week_13_scores = read_csv(&quot;data/2013/FFToday-Week-1-QB.csv&quot;)
+# Remove the &quot;1.&quot; from &quot;1. Peyton Manning&quot;&quot;
+week_13_scores$player = sapply(week_13_scores$player, function(name) { 
+  Encoding(name) = &quot;latin1&quot;  # Was Unicode before
+  name = unlist(strsplit(name, &quot;.&quot;, fixed = TRUE))[2]
+  trim(name)
+})
+names(week_13_scores)[9] = &quot;Rush&quot;
+names(week_13_scores)[10] = &quot;RushYard&quot;
+names(week_13_scores)[11] = &quot;RushTD&quot;
+
+ecr_scores = inner_join(week_13_ecr, week_13_scores, by = c(&quot;Player&quot; = &quot;player&quot;))
+tier_ecr = Mclust(ecr_scores$Ave, G = kTiers[&quot;QB&quot;])
+ecr_scores$TierECR = tier_ecr$class
+
+# Compute accuracy
+
+n_tiers = length(unique(tier_ecr$class))
+n_correct = 0
+n_comparisons = 0
+for (i in seq(n_tiers-1)) {
+  this_tier = filter(ecr_scores, TierECR == i)
+  below_tier = filter(ecr_scores, TierECR &gt; i)
+  this_tier$FPts
+  below_tier$FPts
+  comparisons = sapply(this_tier$FPts, function(this_points) {
+    sapply(below_tier$FPts, function(below_points) this_points &gt; below_points)
+  })
+  
+  n_correct = n_correct + sum(comparisons)
+  n_comparisons = n_comparisons + length(comparisons)
+}
+
+n_correct / n_comparisons</code></pre>
+<pre><code>## [1] 0.6917808</code></pre>
 </div>
 <div id="questions-for-jonahandrew" class="section level2">
 <h2>Questions for Jonah/Andrew</h2>

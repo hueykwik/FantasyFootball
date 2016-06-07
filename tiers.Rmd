@@ -16,6 +16,18 @@ library(gsubfn)
 library(XML)
 
 source("util.R")
+
+# Initialize constants
+pos.list = c('qb','rb','wr','te','k','dst')
+
+kYear = 2015
+kCutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
+kTiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
+
+# Plotting
+font = 3.5
+barsize = 1.5  
+dotsize = 2  
 ```
 
 ## Introduction
@@ -50,8 +62,6 @@ the players.
 
 ### All players
 ```{r}
-# Freedman-Diaconis rule for calculating bin width.
-bw = function(x) diff(range(x)) / (2 * IQR(x) / length(x)^(1/3)) 
 qplot(FantPt, data = df, geom = "histogram", binwidth = bw(df$FantPt))
 ```
 
@@ -63,8 +73,6 @@ histograms for the other positions.
 qplot(FantPt, data = qbs, geom = "histogram", binwidth = bw(qbs$FantPt))
 qplot(FantPt, data = qbs[1:24, ], geom = "histogram", binwidth = bw(qbs$FantPt))
 ```
-
-
 
 ### Running Backs
 ```{r}
@@ -96,8 +104,6 @@ Sources:
 * ECR came from FantasyPros. I used a modified version of Boris Chen's code to download the data.
 
 ```{r downloadECR}
-pos.list = c('qb','rb','wr','te','k','dst')
-
 download.data = function(week, pos.list) {
   for (mp in pos.list) {
  	 	# Remove old data files.
@@ -129,9 +135,8 @@ We're going to try a couple things:
 * Come up with Tiering that maximizes accuracy
 
 ```{r integrate_data, warning = FALSE}
-kYear = 2015
-kCutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
-kTiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
+tier_ecr_accuracy = data.frame()
+tier_proj_accuracy = data.frame()
 
 for (week in seq(17)) {
   # print(paste("Week: ", week))
@@ -139,8 +144,11 @@ for (week in seq(17)) {
   # Parser warnings are due to trailing comma at the end of each row
   sdf = read_csv(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
   sdf$Week = week
-  sdf$TierProj = NA
-  sdf$TierECR = NA
+  #sdf$TierProj = NA
+  #sdf$TierECR = NA
+  
+  week_tier_ecr_accuracy = c()
+  week_tier_proj_accuracy = c()
   
   for (pos in toupper(pos.list)) {
     # print(paste("Position: ", pos))
@@ -178,31 +186,50 @@ for (week in seq(17)) {
     # Calculate position rank, negative so lowest rank will be on top in the plot
     # below
     ecr_df$position.rank = -seq(nrow(ecr_df))
-      
-    # Plot it, eyeball what looks good
-    # Tweak fonts
-    # Scatterplot with position rank on x and average rank on y
-    font = 3.5
-    barsize = 1.5  
-    dotsize = 2  
-      
-    # We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
-    # coordinates.
-    p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
-    p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierECR), size=barsize*0.8, alpha=0.4)
-    p = p + coord_flip()
-    p = p + geom_text(aes(label=Player.Name, colour=TierECR, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
-    p = p + scale_x_continuous("Expert Consensus Rank")
-    p = p + ylab("Average Expert Rank")
-    #p
     
-    # Output the plots somewhere so I can look at them
-    out_dir = fn$identity("out/`kYear`/week`week`/png/")
-    out_path = fn$identity("`out_dir`week-`week`-`pos`.png")
-    dir.create(out_dir, recursive = TRUE)
-    ggsave(file = out_path, width = 9.5, height = 8, dpi = 150)
+    plot = FALSE
+    if (plot == TRUE) {
+      # We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
+      # coordinates.
+      p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
+      p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierECR), size=barsize*0.8, alpha=0.4)
+      p = p + coord_flip()
+      p = p + geom_text(aes(label=Player.Name, colour=TierECR, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
+      p = p + scale_x_continuous("Expert Consensus Rank")
+      p = p + ylab("Average Expert Rank")
+      #p
+      
+      # Output the plots somewhere so I can look at them
+      out_dir = fn$identity("out/`kYear`/week`week`/png/")
+      out_path = fn$identity("`out_dir`week-`week`-`pos`.png")
+      dir.create(out_dir, recursive = TRUE)
+      ggsave(file = out_path, width = 9.5, height = 8, dpi = 150)
+    }
+    
+    if (pos == "DST") {
+      ecr_scores = inner_join(ecr_df, pos_df, by = c("Team" = "team"))
+    } else {
+      all_pos_df = sdf %>% filter(position == pos)
+      ecr_scores = inner_join(ecr_df, all_pos_df, by = c("Player.Name" = "playername"))
+    }
+    
+    week_tier_proj_accuracy  = c(week_tier_proj_accuracy, computeAccuracy(pos_df$actualPoints, as.numeric(pos_df$TierProj)))
+    week_tier_ecr_accuracy = c(week_tier_ecr_accuracy, computeAccuracy(ecr_scores$actualPoints, as.numeric(ecr_scores$TierECR)))
   }
+  tier_proj_accuracy = rbind(tier_proj_accuracy, week_tier_proj_accuracy)
+  tier_ecr_accuracy = rbind(tier_ecr_accuracy, week_tier_ecr_accuracy)
+  
+  select(pos_df, playername, TierProj, actualPoints)
+  select(ecr_scores, Player.Name, TierECR, actualPoints)
+  
+  names(tier_proj_accuracy) = pos.list
+  names(tier_ecr_accuracy) = pos.list
+  
+  mean_proj = sapply(tier_proj_accuracy, mean)
+  mean_tier = sapply(tier_ecr_accuracy, mean)
 }
+
+computeAccuracy(as.numeric(pos_df$actualPoints), as.numeric(pos_df$TierProj))
 ```
 
 
@@ -254,21 +281,50 @@ week_13_scores$player = sapply(week_13_scores$player, function(name) {
   name = unlist(strsplit(name, ".", fixed = TRUE))[2]
   trim(name)
 })
+names(week_13_scores)[9] = "Rush"
+names(week_13_scores)[10] = "RushYard"
+names(week_13_scores)[11] = "RushTD"
 
+ecr_scores = inner_join(week_13_ecr, week_13_scores, by = c("Player" = "player"))
+tier_ecr = Mclust(ecr_scores$Ave, G = kTiers["QB"])
+ecr_scores$TierECR = tier_ecr$class
+
+# Compute accuracy
+
+computeAccuracy = function(scores, tiers) {
+  n_tiers = length(unique(tiers))
+  n_correct = 0
+  n_comparisons = 0
+  
+  medians = c()
+  for (i in seq(n_tiers)) {
+    median = median(scores[tiers == i])
+    medians = c(medians, median)
+  }
+  
+  for (i in seq(n_tiers-1)) {
+    curr_median = medians[i]
+    below_medians = medians[(i+1):n_tiers]
+  
+    comparisons = sapply(below_medians, function(x) curr_median > x)
+  
+    n_correct = n_correct + sum(comparisons)
+    n_comparisons = n_comparisons + length(comparisons)
+  }
+  
+  return(n_correct / n_comparisons)
+}
+
+computeAccuracy(ecr_scores$FPts, ecr_scores$TierECR)
+
+week_10 = read_delim("data/2013/week-10-qb-tiers-points", delim = " ")
+computeAccuracy(week_10$points, week_10$tier)
+
+tiers = c(1,2,3,4,5)
+medians = c(27.6, 23.9, 14, 16.7, 8.9)
+
+computeAccuracy(medians, tiers)
 ```
 
 
-## Questions for Jonah/Andrew
-- Right direction or wrong direction?
-  - Should my goal be to try to come up with a better clustering? Should it be something else?
-- How could I apply a Bayesian prior to this problem, per Andrew's email
 
-## Notes
-- It's not clear that there really are tiers of players, especially from looking at the distribution.
-- With that said, people like tiers, so it may still be worth trying to improve on this.
-- You can transform a skewed distribution into a normal distribution via Box-Cox. 
--- Why useful? When doing linear models, there is an implicit assumption that the underlying
-is normally distributed. Example: predict log(income) instead income and then exponentiate it later.
-
-- Andrew: start with a Bayesian prior over how one expects "player quality" to
-  be distributed --> key point is predict points based on rankings

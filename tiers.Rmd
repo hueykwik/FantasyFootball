@@ -88,8 +88,9 @@ download.data = function(week, pos.list) {
 
 ## Evaluating Accuracy
 
-Accuracy of a tier is defined as the percentage of time a higher tier results
-in a higher median score than a lower tier.
+[Tier accuracy](http://www.borischen.co/2013/11/week-10-retrospective.html) 
+is defined as the percentage of time a higher tier results in a higher median score 
+than a lower tier.
 
 ```{r}
 computeAccuracy = function(scores, tiers) {
@@ -132,12 +133,20 @@ set of tiers, i.e. Week 17.
 tier_ecr_accuracy = data.frame()
 tier_proj_accuracy = data.frame()
 
-for (week in seq(17)) {
-  # Parser warnings are due to trailing comma at the end of each row
+read_score_data = function(path) {
   sdf = read_csv(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
   sdf$Week = week
+  sdf$actualPoints[sdf$actualPoints == "null"] = 0
   sdf$actualPoints = as.numeric(sdf$actualPoints)
-  sdf$actualPoints[is.na(sdf$actualPoints)] = 0
+  #sdf$actualPoints[is.na(sdf$actualPoints)] = 0
+  
+  return(sdf)
+}
+
+plot = FALSE
+for (week in seq(17)) {
+  # Parser warnings are due to trailing comma at the end of each row
+  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
   
   week_tier_ecr_accuracy = c()
   week_tier_proj_accuracy = c()
@@ -181,8 +190,7 @@ for (week in seq(17)) {
     # below
     ecr_df$position.rank = -seq(nrow(ecr_df))
     
-    plot = FALSE
-    if (plot == TRUE) {
+    if (plot) {
       # We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
       # coordinates.
       p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
@@ -226,6 +234,9 @@ for (week in seq(17)) {
 
 It appears that clustering based off of projections performs slightly better.
 
+TODO: How do we test accuracy better?
+Bootstrap, leave out 20%, see if it still does better
+
 ```{r}
   round(tier_proj_accuracy * 100, 1)
 
@@ -238,17 +249,84 @@ It appears that clustering based off of projections performs slightly better.
   round(mean_tier * 100, 1)
 ```
 
+# Random partioning into tiers
 
-### Idea 2: Grid search
-Example: Suppose I was trying to separate RBs into two tiers, where would I draw the line?
-- I could do essentialy binary search, say the range is 0-400 projected points
-- Draw the line at 200
-- Cost function -> accuracy mentioned below
+Perhaps I can train = 2015 season, test = 2014 season or vice versa
 
-Generalize for k 
+```{r randomPartition utility function}
+
+randomPartition = function(k, len) {
+  indexes = sample(seq(len-1), k-1)
+  return(sort(indexes))
+}
+
+expand = function(tiers, indexes, len) {
+# expand(letters[1:4], c(1,2,3), 5)  # abcdd
+# expand(letters[1:4], c(1,3,4), 5)  # abbcd
+# expand(letters[1:4], c(1,3,4), 5)  # abbcdd
+  vec = vector("list", len)
+  k = length(indexes)
+  start = 1
+  for (i in seq(k)) {
+    idx = indexes[i]
+    vec[start:idx] = tiers[i]
+    start = idx + 1 
+  }
+  vec[start:len] = tiers[i+1]
+  return(unlist(vec))
+}
+
+bestPartition = function(k, act_points, order_data) {
+  # Usage example: (also suggest setting seed for reproducibility)
+  # test_df = ecr_scores %>% select(playername, points, actualPoints) %>% arrange(desc(points))
+  # bestPartition(7, test_df$actualPoints, test_df$points)
+
+  max_acc = -1
+  best_indexes = c()
+  len = length(act_points)
+  for (i in seq(kTries)) {
+    indexes = randomPartition(k, len)
+    tier = expand(1:k, indexes, len)
+    acc = computeAccuracy(act_points, tier)
+    if (is.na(acc)) {
+      browser()
+    }
+    if (acc > max_acc) {
+      max_acc = acc
+      best_indexes = indexes
+    }
+  }
+  #print(max_acc)
+  return (best_indexes)
+}
 
 
+set.seed(1)
+kTries = 2000
+
+# Example for week 17 DST
+test_df = ecr_scores %>% select(playername, points, actualPoints) %>% arrange(desc(points))
+n_tiers = 7
+best_indexes = bestPartition(n_tiers, test_df$actualPoints, test_df$points)
+expand(1:n_tiers, best_indexes, nrow(test_df))
 ```
 
+```{r random partition tiers}
+for (week in seq(17)) {
+  print(paste("week:", week)) 
+  # Parser warnings are due to trailing comma at the end of each row
+  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
+  for (pos in toupper(pos.list)) {
+    print(pos)
+    pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
+    best_indexes = bestPartition(kTiers[pos], test_df$actualPoints, test_df$points)
+    tiers = expand(1:kTiers[pos], best_indexes, nrow(test_df))
+    print(tiers)
+    
+    # save it somewhere
+  }
+}
+
+```
 
 

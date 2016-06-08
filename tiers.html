@@ -162,7 +162,7 @@ $(document).ready(function () {
 </div>
 <div id="evaluating-accuracy" class="section level2">
 <h2>Evaluating Accuracy</h2>
-<p>Accuracy of a tier is defined as the percentage of time a higher tier results in a higher median score than a lower tier.</p>
+<p><a href="http://www.borischen.co/2013/11/week-10-retrospective.html">Tier accuracy</a> is defined as the percentage of time a higher tier results in a higher median score than a lower tier.</p>
 <pre class="r"><code>computeAccuracy = function(scores, tiers) {
   n_tiers = length(unique(tiers))
   n_correct = 0
@@ -199,12 +199,20 @@ $(document).ready(function () {
 <pre class="r"><code>tier_ecr_accuracy = data.frame()
 tier_proj_accuracy = data.frame()
 
-for (week in seq(17)) {
-  # Parser warnings are due to trailing comma at the end of each row
+read_score_data = function(path) {
   sdf = read_csv(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;))
   sdf$Week = week
+  sdf$actualPoints[sdf$actualPoints == &quot;null&quot;] = 0
   sdf$actualPoints = as.numeric(sdf$actualPoints)
-  sdf$actualPoints[is.na(sdf$actualPoints)] = 0
+  #sdf$actualPoints[is.na(sdf$actualPoints)] = 0
+  
+  return(sdf)
+}
+
+plot = FALSE
+for (week in seq(17)) {
+  # Parser warnings are due to trailing comma at the end of each row
+  sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;))
   
   week_tier_ecr_accuracy = c()
   week_tier_proj_accuracy = c()
@@ -248,8 +256,7 @@ for (week in seq(17)) {
     # below
     ecr_df$position.rank = -seq(nrow(ecr_df))
     
-    plot = FALSE
-    if (plot == TRUE) {
+    if (plot) {
       # We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
       # coordinates.
       p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
@@ -290,6 +297,8 @@ for (week in seq(17)) {
 </div>
 <div id="results" class="section level1">
 <h1>Results</h1>
+<p>It appears that clustering based off of projections performs slightly better.</p>
+<p>TODO: How do we test accuracy better? Bootstrap, leave out 20%, see if it still does better</p>
 <pre class="r"><code>  round(tier_proj_accuracy * 100, 1)</code></pre>
 <pre><code>##      QB    RB    WR    TE    K   DST
 ## 1  73.3  67.9  76.4  78.6 33.3  80.0
@@ -337,12 +346,444 @@ for (week in seq(17)) {
 <pre class="r"><code>  round(mean_tier * 100, 1)</code></pre>
 <pre><code>##   QB   RB   WR   TE    K  DST 
 ## 63.4 70.2 72.5 65.5 46.1 64.1</code></pre>
-<div id="idea-2-grid-search" class="section level3">
-<h3>Idea 2: Grid search</h3>
-<p>Example: Suppose I was trying to separate RBs into two tiers, where would I draw the line? - I could do essentialy binary search, say the range is 0-400 projected points - Draw the line at 200 - Cost function -&gt; accuracy mentioned below</p>
-<p>Generalize for k</p>
-<p>```</p>
 </div>
+<div id="random-partioning-into-tiers" class="section level1">
+<h1>Random partioning into tiers</h1>
+<p>Perhaps I can train = 2015 season, test = 2014 season or vice versa</p>
+<pre class="r"><code>randomPartition = function(k, len) {
+  indexes = sample(seq(len-1), k-1)
+  return(sort(indexes))
+}
+
+expand = function(tiers, indexes, len) {
+# expand(letters[1:4], c(1,2,3), 5)  # abcdd
+# expand(letters[1:4], c(1,3,4), 5)  # abbcd
+# expand(letters[1:4], c(1,3,4), 5)  # abbcdd
+  vec = vector(&quot;list&quot;, len)
+  k = length(indexes)
+  start = 1
+  for (i in seq(k)) {
+    idx = indexes[i]
+    vec[start:idx] = tiers[i]
+    start = idx + 1 
+  }
+  vec[start:len] = tiers[i+1]
+  return(unlist(vec))
+}
+
+bestPartition = function(k, act_points, order_data) {
+  # Usage example: (also suggest setting seed for reproducibility)
+  # test_df = ecr_scores %&gt;% select(playername, points, actualPoints) %&gt;% arrange(desc(points))
+  # bestPartition(7, test_df$actualPoints, test_df$points)
+
+  max_acc = -1
+  best_indexes = c()
+  len = length(act_points)
+  for (i in seq(kTries)) {
+    indexes = randomPartition(k, len)
+    tier = expand(1:k, indexes, len)
+    acc = computeAccuracy(act_points, tier)
+    if (is.na(acc)) {
+      browser()
+    }
+    if (acc &gt; max_acc) {
+      max_acc = acc
+      best_indexes = indexes
+    }
+  }
+  #print(max_acc)
+  return (best_indexes)
+}
+
+
+set.seed(1)
+kTries = 2000
+
+# Example for week 17 DST
+test_df = ecr_scores %&gt;% select(playername, points, actualPoints) %&gt;% arrange(desc(points))
+n_tiers = 7
+best_indexes = bestPartition(n_tiers, test_df$actualPoints, test_df$points)
+expand(1:n_tiers, best_indexes, nrow(test_df))</code></pre>
+<pre><code>##  [1] 1 2 2 3 4 4 4 5 5 5 6 6 7 7 7 7 7 7 7 7</code></pre>
+<pre class="r"><code>for (week in seq(17)) {
+  print(paste(&quot;week:&quot;, week)) 
+  # Parser warnings are due to trailing comma at the end of each row
+  sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;))
+  for (pos in toupper(pos.list)) {
+    print(pos)
+    pos_df = sdf %&gt;% filter(position == pos, positionRank &lt;= kCutoffs[pos]) %&gt;% arrange(desc(points))
+    best_indexes = bestPartition(kTiers[pos], test_df$actualPoints, test_df$points)
+    tiers = expand(1:kTiers[pos], best_indexes, nrow(test_df))
+    print(tiers)
+    
+    # save it somewhere
+  }
+}</code></pre>
+<pre><code>## [1] &quot;week: 1&quot;
+## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 6 6 6 7 7 7 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 6 6 6 7 7 8 9 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  6  7  8  9 10 10 10 11 11 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 6 6 6 6 7 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 2 2 2 2 2 2 3 3 4 4 4 4 5 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 1 2 3 3 3 3 4 4 5 5 5 5 6 6 6 6 6 6
+## [1] &quot;week: 2&quot;</code></pre>
+<pre><code>## Warning: 882 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 1 1 2 3 3 3 4 4 5 5 6 7 7 7 7 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 6 6 7 7 7 8 9 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  6  7  8  9  9  9 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 7 7 7 7 7 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 1 1 1 2 2 2 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 1 2 3 3 3 3 4 4 5 5 6 6 6 6 6 6 6 6
+## [1] &quot;week: 3&quot;</code></pre>
+<pre><code>## Warning: 880 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 7 7 7 8 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 7 7 8 9 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  5  6  7  8  8  9 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 2 3 3 3 4 4 5 5 6 6 6 7 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 2 2 3 3 3 3 3 3 4 4 5 5 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 1 2 2 2 2 3 4 4 5 5 5 5 6 6 6 6 6 6
+## [1] &quot;week: 4&quot;</code></pre>
+<pre><code>## Warning: 841 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 6 6 7 7 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 6 6 6 7 8 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  3  4  5  5  5  6  6  7  8  9 10 10 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 1 1 2 3 3 3 4 4 5 5 6 6 6 7 7 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 1 1 1 2 3 3 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 2 2 3 3 3 3 4 4 5 5 6 6 6 6 6 6 6 6
+## [1] &quot;week: 5&quot;</code></pre>
+<pre><code>## Warning: 797 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 3 3 3 4 4 5 5 6 6 7 8 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 6 6 6 7 8 8 9 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  3  4  5  5  5  6  6  7  8  8  8  9 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 3 3 3 3 3 4 4 5 5 6 6 7 8 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 2 2 2 2 2 2 2 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 1 2 3 3 3 3 4 4 5 5 5 5 6 6 6 6 6 6
+## [1] &quot;week: 6&quot;</code></pre>
+<pre><code>## Warning: 786 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 4 4 4 4 5 5 6 6 7 7 8 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 7 8 9 9 9 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  6  6  7  8  9  9 10 11 11 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 7 7 7 8 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 2 2 3 3 3 3 4 4 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 2 2 3 3 3 3 4 4 5 5 5 5 6 6 6 6 6 6 6
+## [1] &quot;week: 7&quot;</code></pre>
+<pre><code>## Warning: 792 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 5 6 7 8 8 8 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 5 6 7 7 8 9 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  6  7  8  9  9 10 11 12 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 7 7 7 8 8 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 2 2 2 2 2 3 3 4 4 5 5 5 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 2 3 3 3 3 3 3 4 4 5 5 5 5 6 6 6 6 6 6
+## [1] &quot;week: 8&quot;</code></pre>
+<pre><code>## Warning: 788 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 7 8 8 8 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 3 3 3 4 4 5 6 7 7 7 8 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  5  6  7  8  8  9 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 6 6 6 6 7 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 1 1 1 2 3 3 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 2 2 2 2 2 2 3 3 4 4 5 6 6 6 6 6 6 6 6
+## [1] &quot;week: 9&quot;</code></pre>
+<pre><code>## Warning: 750 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 3 3 4 4 4 4 5 6 6 6 7 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 6 6 6 7 8 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  5  6  7  8  8  9 10 11 11 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 3 3 4 4 4 5 6 6 7 7 7 7 8 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 1 1 1 2 3 3 3 3 4 4 5 5 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 2 2 3 3 3 3 4 4 5 5 6 6 6 6 6 6 6 6
+## [1] &quot;week: 10&quot;</code></pre>
+<pre><code>## Warning: 796 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 2 3 3 3 4 4 5 5 6 6 7 8 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 3 3 4 4 4 4 5 5 6 6 6 6 7 8 8 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  3  3  4  4  4  5  5  6  7  8  9  9 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 1 1 2 3 3 3 4 4 5 5 6 7 7 7 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 2 2 3 3 3 3 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 2 2 3 3 3 3 4 4 5 5 6 6 6 6 6 6 6 6
+## [1] &quot;week: 11&quot;</code></pre>
+<pre><code>## Warning: 786 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 7 7 7 7 7 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 1 1 2 3 3 3 4 4 5 6 7 7 7 8 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  5  6  7  8  9  9  9 10 11 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 1 1 2 3 3 3 4 4 5 5 6 7 7 7 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 2 2 3 3 3 3 3 3 4 4 5 5 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 2 2 2 2 2 3 3 4 4 5 6 6 6 6 6 6 6 6
+## [1] &quot;week: 12&quot;</code></pre>
+<pre><code>## Warning: 879 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 3 3 4 4 4 4 5 5 6 6 7 7 7 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 7 7 7 7 8 8 8 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  3  3  3  3  3  4  5  6  7  8  9  9 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 3 3 3 4 4 4 4 5 6 7 7 7 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 2 2 2 2 2 2 3 3 4 4 5 5 5 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 2 2 2 3 3 3 4 4 4 5 5 5 5 6 6 6 6 6 6
+## [1] &quot;week: 13&quot;</code></pre>
+<pre><code>## Warning: 881 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 3 3 4 4 4 4 5 5 6 6 7 7 7 7 7 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 3 3 3 3 3 4 4 5 6 7 7 7 8 8 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  6  7  8  9  9 10 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 2 3 3 3 4 4 5 5 6 6 6 7 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 2 2 3 3 3 3 4 4 4 4 5 5 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 1 2 3 3 3 4 4 5 5 5 5 6 6 6 6 6 6 6
+## [1] &quot;week: 14&quot;</code></pre>
+<pre><code>## Warning: 877 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 3 3 3 4 4 5 6 6 6 6 6 7 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 7 7 8 8 8 8 8 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  5  6  7  8  9  9 10 10 11 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 3 3 4 4 4 4 5 5 6 6 6 6 7 7 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 1 2 2 2 2 3 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 2 2 3 3 3 3 3 3 4 4 5 5 6 6 6 6 6 6
+## [1] &quot;week: 15&quot;</code></pre>
+<pre><code>## Warning: 876 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 1 1 2 3 3 3 4 4 5 5 6 7 7 7 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 6 7 7 8 9 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  6  7  8  9 10 10 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 3 4 4 4 5 6 6 6 7 8 8 8 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 1 1 1 2 3 3 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 2 2 3 3 3 3 4 4 5 5 5 5 6 6 6 6 6 6
+## [1] &quot;week: 16&quot;</code></pre>
+<pre><code>## Warning: 874 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 3 3 4 4 4 5 6 6 7 7 8 8 8 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 2 3 4 4 4 5 5 6 7 8 8 8 8 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  6  7  8  9 10 10 10 11 12 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 3 3 4 4 4 4 5 5 5 6 6 6 7 7 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 2 2 2 2 2 3 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 1 1 1 2 2 2 3 3 4 4 5 6 6 6 6 6 6 6 6
+## [1] &quot;week: 17&quot;</code></pre>
+<pre><code>## Warning: 873 parsing failures.
+## row col   expected     actual
+##   1  -- 23 columns 24 columns
+##   2  -- 23 columns 24 columns
+##   3  -- 23 columns 24 columns
+##   4  -- 23 columns 24 columns
+##   5  -- 23 columns 24 columns
+## ... ... .......... ..........
+## .See problems(...) for more details.</code></pre>
+<pre><code>## [1] &quot;QB&quot;
+##  [1] 1 2 2 3 4 4 4 5 6 6 6 7 7 7 8 8 8 8 8 8
+## [1] &quot;RB&quot;
+##  [1] 1 2 3 3 4 4 4 4 5 5 6 7 8 8 9 9 9 9 9 9
+## [1] &quot;WR&quot;
+##  [1]  1  2  2  3  4  4  4  5  5  6  7  8  8  9 10 10 11 12 12 12
+## [1] &quot;TE&quot;
+##  [1] 1 2 2 3 3 3 4 4 4 4 5 6 7 7 8 8 8 8 8 8
+## [1] &quot;K&quot;
+##  [1] 1 1 1 2 2 2 2 3 3 3 4 4 4 4 5 5 5 5 5 5
+## [1] &quot;DST&quot;
+##  [1] 1 2 3 3 3 3 3 4 4 4 5 5 5 5 6 6 6 6 6 6</code></pre>
 </div>
 
 

@@ -138,8 +138,6 @@ read_score_data = function(path) {
   sdf$Week = week
   sdf$actualPoints[sdf$actualPoints == "null"] = 0
   sdf$actualPoints = as.numeric(sdf$actualPoints)
-  #sdf$actualPoints[is.na(sdf$actualPoints)] = 0
-  
   return(sdf)
 }
 
@@ -251,7 +249,13 @@ Bootstrap, leave out 20%, see if it still does better
 
 # Random partioning into tiers
 
-Perhaps I can train = 2015 season, test = 2014 season or vice versa
+Here we explore another way to generate tiers. Instead of applying GMM on the 
+list of ordered projections, we compute many different random tiers. 
+
+Using the accuracy (as defined above) as a cost function, we pick the partition
+that provides the best accuracy.
+
+Below are the utilty functions written to compute a random partition.
 
 ```{r randomPartition utility function}
 
@@ -288,45 +292,117 @@ bestPartition = function(k, act_points, order_data) {
     indexes = randomPartition(k, len)
     tier = expand(1:k, indexes, len)
     acc = computeAccuracy(act_points, tier)
-    if (is.na(acc)) {
-      browser()
-    }
     if (acc > max_acc) {
       max_acc = acc
       best_indexes = indexes
     }
   }
-  #print(max_acc)
   return (best_indexes)
 }
-
-
-set.seed(1)
-kTries = 2000
-
-# Example for week 17 DST
-test_df = ecr_scores %>% select(playername, points, actualPoints) %>% arrange(desc(points))
-n_tiers = 7
-best_indexes = bestPartition(n_tiers, test_df$actualPoints, test_df$points)
-expand(1:n_tiers, best_indexes, nrow(test_df))
 ```
 
-```{r random partition tiers}
+Here we compute the random partitions on the 2015 data and then save them
+to a data frame.
+
+```{r random partition tiers, warning = FALSE}
+set.seed(1)
+kTries = 2000  # Make smaller for debugging
+
+tier_df = data.frame()
 for (week in seq(17)) {
-  print(paste("week:", week)) 
   # Parser warnings are due to trailing comma at the end of each row
   sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
   for (pos in toupper(pos.list)) {
-    print(pos)
     pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
     best_indexes = bestPartition(kTiers[pos], test_df$actualPoints, test_df$points)
     tiers = expand(1:kTiers[pos], best_indexes, nrow(test_df))
-    print(tiers)
-    
-    # save it somewhere
+    tier_counts = sapply(1:kTiers[pos], function(tier) { c(week, pos, tier, length(tiers[tiers == tier])) })
+    tier_df = rbind(tier_df, t(tier_counts))
   }
 }
-
+names(tier_df) = c("Week", "Pos", "Tier", "TierCount")
+tier_df$TierCount = as.numeric(tier_df$TierCount)
 ```
 
+Looking at small multiples of the tiers helps us see the distribution of tiers 
+per position each week. 
+
+Interestingly, the algorithm suggests that Tier 1 for all non Kicker/Defense 
+positions is size 1.
+
+```{r faceting by tier}
+for (pos in toupper(pos.list)) {
+  pos_tier = tier_df %>% filter(Pos == pos)
+  print(ggplot(pos_tier, aes(x=Week, y=TierCount, group = 1)) + 
+    geom_point() + facet_wrap(~Tier) + ggtitle(pos))
+}
+```
+
+Now what's left is to use this data and apply it again to the 2015 season.
+
+The idea I'll try below is to take the mode for each tier's count and then use 
+that to partition the data. If there are multiple modes, I pick the higher count.
+
+```{r mode}
+qb = tier_df %>% filter(Pos == "QB")
+tier = qb %>% filter(Tier == 1)
+mode(tier$TierCount)
+
+tiers_list = list()
+for (pos in toupper(pos.list)) {
+  pdf = tier_df %>% filter(Pos == pos)
+  pos_tiers = sapply(1:kTiers[pos], function(t) {
+    tdf = pdf %>% filter(Tier == t)
+    modes = mode(tdf$TierCount)
+    if (length(mode) > 0) {
+      modes = modes[length(mode)]
+    }
+    return(modes)
+  })
+  tiers_list[pos] = list(pos_tiers)
+}
+
+tiers_list
+```
+
+Next, we'll apply these tiers to the entire dataset and see what our accuracy score is.
+
+If there are still some players left over after applying these tiers, then 
+we'll just create an additional tier to put them in.
+
+```{r}
+expand_by_counts = function(tiers, counts) {
+  unlist(sapply(1:length(tiers), function(i) { rep(tiers[i], counts[i]) }))
+}
+expand_by_counts(letters[1:4], c(1,2,1,4))  # abbcdddd
+
+tier_part_accuracy = data.frame()
+for (week in seq(17)) {
+  # Parser warnings are due to trailing comma at the end of each row
+  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
+  
+  week_tier_part_accuracy = c()
+  
+  for (pos in toupper(pos.list)) {
+     pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos])
+     
+     # apply tiers
+     tiers = expand_by_counts(1:kTiers[pos], tiers_list[[pos]])
+     if (length(tiers) < nrow(pos_df)) {
+       n_left = nrow(pos_df) - length(tiers)
+       k = kTiers[pos] + 1
+       tiers = c(tiers, rep(k, n_left))
+     }
+     pos_df$TierPart = tiers
+     # if length < kCutoffs[pos], add in an additional tier
+     
+     acc = computeAccuracy(pos_df$actualPoints, pos_df$TierPart)
+     week_tier_part_accuracy  = c(week_tier_part_accuracy, acc)
+  }
+
+  tier_part_accuracy = rbind(tier_part_accuracy, week_tier_part_accuracy)
+}
+names(tier_part_accuracy) = toupper(pos.list)
+mean_part = sapply(tier_part_accuracy, mean)
+```
 

@@ -30,7 +30,7 @@ barsize = 1.5
 dotsize = 2  
 ```
 
-## Introduction
+# Introduction
 
 A couple years ago, I encountered a [New York Times article](http://nyti.ms/1t6Bgc3) 
 by Boris Chen that explained a way to use machine learning to improve your starting lineup 
@@ -313,9 +313,9 @@ for (week in seq(17)) {
   # Parser warnings are due to trailing comma at the end of each row
   sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
   for (pos in toupper(pos.list)) {
-    pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
-    best_indexes = bestPartition(kTiers[pos], test_df$actualPoints, test_df$points)
-    tiers = expand(1:kTiers[pos], best_indexes, nrow(test_df))
+    pos_data = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
+    best_indexes = bestPartition(kTiers[pos], pos_data$actualPoints, pos_data$points)
+    tiers = expand(1:kTiers[pos], best_indexes, nrow(pos_data))
     tier_counts = sapply(1:kTiers[pos], function(tier) { c(week, pos, tier, length(tiers[tiers == tier])) })
     tier_df = rbind(tier_df, t(tier_counts))
   }
@@ -361,8 +361,6 @@ for (pos in toupper(pos.list)) {
   })
   tiers_list[pos] = list(pos_tiers)
 }
-
-tiers_list
 ```
 
 Next, we'll apply these tiers to the entire dataset and see what our accuracy score is.
@@ -370,7 +368,7 @@ Next, we'll apply these tiers to the entire dataset and see what our accuracy sc
 If there are still some players left over after applying these tiers, then 
 we'll just create an additional tier to put them in.
 
-```{r}
+```{r apply tiers from random partition, warning = FALSE}
 expand_by_counts = function(tiers, counts) {
   unlist(sapply(1:length(tiers), function(i) { rep(tiers[i], counts[i]) }))
 }
@@ -388,14 +386,15 @@ for (week in seq(17)) {
      
      # apply tiers
      tiers = expand_by_counts(1:kTiers[pos], tiers_list[[pos]])
+  
+     # if length < kCutoffs[pos], add in an additional tier
      if (length(tiers) < nrow(pos_df)) {
        n_left = nrow(pos_df) - length(tiers)
        k = kTiers[pos] + 1
        tiers = c(tiers, rep(k, n_left))
      }
      pos_df$TierPart = tiers
-     # if length < kCutoffs[pos], add in an additional tier
-     
+
      acc = computeAccuracy(pos_df$actualPoints, pos_df$TierPart)
      week_tier_part_accuracy  = c(week_tier_part_accuracy, acc)
   }
@@ -404,5 +403,12 @@ for (week in seq(17)) {
 }
 names(tier_part_accuracy) = toupper(pos.list)
 mean_part = sapply(tier_part_accuracy, mean)
+```
+
+Using this random partitioning technique appears to perform worse than using
+GMM on projections or ECR.
+
+```{r}
+mean_part
 ```
 

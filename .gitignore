@@ -1,2 +1,4 @@
 meta/
 data_backup
+*.RData
+*.Rhistory

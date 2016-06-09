@@ -140,10 +140,13 @@ read_score_data = function(path) {
   sdf$actualPoints = as.numeric(sdf$actualPoints)
   return(sdf)
 }
-# 
-# read_ecr_data = function(path) {
-#   
-# }
+
+read_ecr_data = function(path, n_players) {
+  ecr_df = read_tsv(path) %>% arrange()
+  ecr_df = ecr_df[1:n_players, ]  # The data is ordered from best rank to worst rank  
+  names(ecr_df) = make.names(names(ecr_df))
+  return(ecr_df)
+}
 
 # returns a factor
 computeTierProjections = function(points, k) {
@@ -192,11 +195,7 @@ for (week in seq(17)) {
     
     ## Calculate TierECR
       
-    # Load ECR data for the week
-    ecr_df = read_tsv(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
-    ecr_df = ecr_df[1:kCutoffs[pos], ]  # The data is ordered from best rank to worst rank  
-    names(ecr_df) = make.names(names(ecr_df))
-      
+    ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"), kCutoffs[pos])
     ecr_df$TierECR = computeTierECRs(ecr_df$Avg.Rank, kTiers[pos])
     
     if (plot) {

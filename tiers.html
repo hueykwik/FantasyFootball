@@ -200,11 +200,48 @@ $(document).ready(function () {
 tier_proj_accuracy = data.frame()
 
 read_score_data = function(path) {
-  sdf = read_csv(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;))
+  sdf = read_csv(path)
   sdf$Week = week
   sdf$actualPoints[sdf$actualPoints == &quot;null&quot;] = 0
   sdf$actualPoints = as.numeric(sdf$actualPoints)
   return(sdf)
+}
+
+read_ecr_data = function(path, n_players) {
+  ecr_df = read_tsv(path) %&gt;% arrange()
+  ecr_df = ecr_df[1:n_players, ]  # The data is ordered from best rank to worst rank  
+  names(ecr_df) = make.names(names(ecr_df))
+  return(ecr_df)
+}
+
+# returns a factor
+computeTierProjections = function(points, k) {
+  clusters = Mclust(points, G = k)
+  n_clusters = length(unique(clusters$classification))
+  
+  # Sometimes the model isn't able to fit K clusters
+  while (n_clusters == 0) {
+    k = k - 1
+    clusters = Mclust(points, G = k)
+    n_clusters = length(unique(clusters$classification))
+  }
+  
+  # Reversing so that highest projected points gets Tier 1 
+  tiers = factor(clusters$classification)
+  levels(tiers) = rev(levels(tiers))
+  levels(tiers) = n_clusters:1
+  
+  return(tiers)
+}
+
+computeTierECRs = function(ranks, k) {
+  fit = Mclust(ranks, G = k)
+  tiers = factor(fit$classification)
+  
+  # Remove any potential gap between tiers, e.g. 1 1 2 2 4
+  levels(tiers) = 1:length(unique(fit$classification))
+  
+  return(tiers)
 }
 
 plot = FALSE
@@ -220,41 +257,20 @@ for (week in seq(17)) {
     
     ## Calculate TierProj
     pos_df = sdf %&gt;% filter(position == pos, positionRank &lt;= kCutoffs[pos])
-    
-    proj_fit = Mclust(pos_df$points, G = kTiers[pos])
-    n_clusters = length(unique(proj_fit$classification))
-    
-    # Sometimes the model isn't able to fit K clusters
-    k = kTiers[pos] - 1
-    while (n_clusters == 0) {
-      proj_fit = Mclust(pos_df$points, G = k)
-      n_clusters = length(unique(proj_fit$classification))
-      k = k - 1
-    }
-    
-    # Reversing so that highest projected points gets Tier 1 
-    pos_df$TierProj = factor(proj_fit$classification)
-    levels(pos_df$TierProj) = rev(levels(pos_df$TierProj))
-    levels(pos_df$TierProj) = n_clusters:1
+    pos_df$TierProj = computeTierProjections(pos_df$points, kTiers[pos])
     
     ## Calculate TierECR
       
-    # Load ECR data for the week
-    ecr_df = read_tsv(fn$identity(&quot;data/2015/week_`week`_`tolower(pos)`.tsv&quot;))
-    ecr_df = ecr_df[1:kCutoffs[pos], ]  # The data is ordered from best rank to worst rank  
-    names(ecr_df) = make.names(names(ecr_df))
-      
-    # Calculate tiers based on average rank
-    fit = Mclust(ecr_df$Avg.Rank, G = kTiers[pos])
-    ecr_df$TierECR = factor(fit$classification)
-    levels(ecr_df$TierECR) = 1:length(unique(fit$classification))
-    ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
-      
-    # Calculate position rank, negative so lowest rank will be on top in the plot
-    # below
-    ecr_df$position.rank = -seq(nrow(ecr_df))
+    ecr_df = read_ecr_data(fn$identity(&quot;data/2015/week_`week`_`tolower(pos)`.tsv&quot;), kCutoffs[pos])
+    ecr_df$TierECR = computeTierECRs(ecr_df$Avg.Rank, kTiers[pos])
     
     if (plot) {
+      ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
+      
+      # Calculate position rank, negative so lowest rank will be on top in the plot
+      # below
+      ecr_df$position.rank = -seq(nrow(ecr_df))
+      
       # We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
       # coordinates.
       p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
@@ -295,8 +311,8 @@ for (week in seq(17)) {
 </div>
 <div id="results" class="section level1">
 <h1>Results</h1>
-<p>It appears that clustering based off of projections performs slightly better.</p>
-<p>TODO: How do we test accuracy better? Bootstrap, leave out 20%, see if it still does better</p>
+<p>Define: For consistency, “TierProjections” will refer to creating tiers based on projected scores, and “TierECR” will refer to creating tiers based on Expert Consensus Rank.</p>
+<p>It appears that clustering based off of projections performs slightly better. For instance, TierProjections performs better on QBs, RBs, WRs, TEs, and Kickers, whereas TierECR performs better on Defense. Note that tier accuracy for Kickers is near 50%, which suggests streaming kickers is a good idea.</p>
 <pre class="r"><code>  round(tier_proj_accuracy * 100, 1)</code></pre>
 <pre><code>##      QB    RB    WR    TE    K   DST
 ## 1  73.3  67.9  76.4  78.6 33.3  80.0
@@ -344,9 +360,24 @@ for (week in seq(17)) {
 <pre class="r"><code>  round(mean_tier * 100, 1)</code></pre>
 <pre><code>##   QB   RB   WR   TE    K  DST 
 ## 63.4 70.2 72.5 65.5 46.1 64.1</code></pre>
-</div>
-<div id="random-partioning-into-tiers" class="section level1">
-<h1>Random partioning into tiers</h1>
+<p>To get a better sense of how these two algorithms compete on more data, there are two approaches we can take.</p>
+<p>The most obvious approach is to look at historical data. Unfortunately, FantasyPros does not keep a record of ECR from past seasons. I tried using the <a href="https://archive.org/web/">Wayback Machine</a>, but there simply were not enough snapshots to make this worthwhile.</p>
+<p>Chen has published tiers for the 2013-2015 seasons on his blog, but the data isn’t always available. For instance, some of the links to the tiers in the 2014 season are dead. However, the 2013 season is available so I might try that next.</p>
+<p>Instead, we create bootstrap samples for the 2015 season and then see how well each method performs.</p>
+<pre class="r"><code># 
+# for score_data {
+#   n = 1000
+#   for (i in 1:n) {
+#     score_data = score_data[sample(nrow, nrow, replace = TRUE), ]
+#     compute tiers and accuracy ecr
+#     compute tiers and accuracy proj
+#     
+#     n_proj_wins = acc_proj &gt; acc_ecr
+#     store the comparison
+#   }
+#   n_proj_wins / n 
+# }</code></pre>
+<p>What % of time does TierProjections perform better than TierECR? # Random partioning into tiers</p>
 <p>Here we explore another way to generate tiers. Instead of applying GMM on the list of ordered projections, we compute many different random tiers.</p>
 <p>Using the accuracy (as defined above) as a cost function, we pick the partition that provides the best accuracy.</p>
 <p>Below are the utilty functions written to compute a random partition.</p>

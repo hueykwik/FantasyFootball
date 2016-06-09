@@ -141,41 +141,46 @@ read_score_data = function(path) {
   return(sdf)
 }
 
-read_ecr_data = function(path, n_players) {
-  ecr_df = read_tsv(path) %>% arrange()
-  ecr_df = ecr_df[1:n_players, ]  # The data is ordered from best rank to worst rank  
+read_ecr_data = function(path) {
+  ecr_df = read_tsv(path) 
   names(ecr_df) = make.names(names(ecr_df))
   return(ecr_df)
 }
 
-# returns a factor
-computeTierProjections = function(points, k) {
-  clusters = Mclust(points, G = k)
-  n_clusters = length(unique(clusters$classification))
-  
-  # Sometimes the model isn't able to fit K clusters
-  while (n_clusters == 0) {
-    k = k - 1
-    clusters = Mclust(points, G = k)
-    n_clusters = length(unique(clusters$classification))
+computeTiers = function(scores, k, reverse = FALSE) {
+  # reverse: Useful for clustering on projected points. We want highest projected points to be rank 1, so 
+  # we reverse the levels.
+  clusters = NULL
+  while (is.null(clusters)) {
+    tryCatch({ 
+      clusters = Mclust(scores, G = k)
+    }, 
+    warning = function(w) { warning(w); return(NULL) },
+    error = function(e) { warning(e); return(NULL) })
+    
+    if (!is.null(clusters)) break 
+    k = k -1
   }
   
-  # Reversing so that highest projected points gets Tier 1 
+  n_clusters = length(unique(clusters$classification))
   tiers = factor(clusters$classification)
-  levels(tiers) = rev(levels(tiers))
-  levels(tiers) = n_clusters:1
-  
+  if (reverse) {
+    levels(tiers) = rev(levels(tiers))
+    levels(tiers) = n_clusters:1
+  } else {
+    levels(tiers) = 1:n_clusters
+  }
+    
   return(tiers)
 }
 
-computeTierECRs = function(ranks, k) {
-  fit = Mclust(ranks, G = k)
-  tiers = factor(fit$classification)
-  
-  # Remove any potential gap between tiers, e.g. 1 1 2 2 4
-  levels(tiers) = 1:length(unique(fit$classification))
-  
-  return(tiers)
+joinECRScores = function(ecr_df, all_pos_df, pos) {
+  if (pos == "DST") {
+    ecr_scores = inner_join(ecr_df, all_pos_df, by = c("Team" = "team"))
+  } else {
+    ecr_scores = inner_join(ecr_df, all_pos_df, by = c("Player.Name" = "playername"))
+  }
+  return(ecr_scores)
 }
 
 plot = FALSE
@@ -191,12 +196,12 @@ for (week in seq(17)) {
     
     ## Calculate TierProj
     pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos])
-    pos_df$TierProj = computeTierProjections(pos_df$points, kTiers[pos])
+    pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
     
     ## Calculate TierECR
-      
-    ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"), kCutoffs[pos])
-    ecr_df$TierECR = computeTierECRs(ecr_df$Avg.Rank, kTiers[pos])
+    ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
+    ecr_df = ecr_df[1:kCutoffs[pos], ]  # The data is ordered from best rank to worst rank  
+    ecr_df$TierECR = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
     
     if (plot) {
       ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
@@ -222,12 +227,8 @@ for (week in seq(17)) {
       ggsave(file = out_path, width = 9.5, height = 8, dpi = 150)
     }
     
-    if (pos == "DST") {
-      ecr_scores = inner_join(ecr_df, pos_df, by = c("Team" = "team"))
-    } else {
-      all_pos_df = sdf %>% filter(position == pos)
-      ecr_scores = inner_join(ecr_df, all_pos_df, by = c("Player.Name" = "playername"))
-    }
+    all_pos_df = sdf %>% filter(position == pos)
+    ecr_scores = joinECRScores(ecr_df, all_pos_df, pos)
     
     acc = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
     acc_ecr = computeAccuracy(ecr_scores$actualPoints, ecr_scores$TierECR)
@@ -250,10 +251,9 @@ Define:
 For consistency, "TierProjections" will refer to creating tiers based on projected
 scores, and "TierECR" will refer to creating tiers based on Expert Consensus Rank. 
 
-It appears that clustering based off of projections performs slightly better.
-For instance, TierProjections performs better on QBs, RBs, WRs, TEs, and Kickers, 
-whereas TierECR performs better on Defense. Note that tier accuracy for Kickers is
-near 50%, which suggests streaming kickers is a good idea.
+It appears that clustering based off of projections performs slightly better for
+all positions. Note that tier accuracy for Kickers is near 50%, which suggests 
+that streaming kickers is a good idea.
 
 ```{r}
   round(tier_proj_accuracy * 100, 1)
@@ -283,21 +283,41 @@ Instead, we create bootstrap samples for the 2015 season and then see how well
 each method performs.
 
 ```{r}
-
-
-
-for score_data {
-  n = 1000
-  for (i in 1:n) {
-    score_data = score_data[sample(nrow, nrow, replace = TRUE), ]
-    compute tiers and accuracy ecr
-    compute tiers and accuracy proj
+set.seed(1)
+n = 1000
+results_df = data.frame()
+for (week in seq(17)) {
+   sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
+   print(week)
+   row = c()
+   for (pos in toupper(pos.list)) {
+      n_proj_wins = 0
+      pos_df = sdf %>% filter(position == pos)
+      ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
+      ecr_scores = joinECRScores(ecr_df, pos_df, pos) 
+      for (i in seq(n)) {
+        sample = ecr_scores[sample(nrow(ecr_scores), nrow(ecr_scores), replace = TRUE), ]
+   
+        pos_df = sample %>% filter(positionRank <= kCutoffs[pos])
+        # select(pos_df, playername, points, actualPoints, TierProj)  # For debugging
+        pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
     
-    n_proj_wins = acc_proj > acc_ecr
-    store the comparison
-  }
-  n_proj_wins / n 
+        ## Calculate TierECR
+        ecr_df = sample %>% arrange(Rank)
+        ecr_df = ecr_df[1:kCutoffs[pos], ]
+        select(ecr_df, playername, points, actualPoints, Avg.Rank)  # For debugging
+        ecr_df$TierECR = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
+
+        acc = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
+        acc_ecr = computeAccuracy(ecr_df$actualPoints, ecr_df$TierECR)
+        
+        n_proj_wins = n_proj_wins + (acc > acc_ecr) 
+      }
+      row = c(row, n_proj_wins / n)
+   }
+   results_df = rbind(results_df, row)
 }
+names(results_df) = toupper(pos.list)
 ```
 
 What % of time does TierProjections perform better than TierECR?

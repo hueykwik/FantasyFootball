@@ -408,7 +408,7 @@ to a data frame.
 
 ```{r random partition tiers, warning = FALSE}
 set.seed(1)
-kTries = 2000  # Make smaller for debugging
+kTries = 10  # Make smaller for debugging
 
 tier_df = data.frame()
 for (week in seq(17)) {
@@ -416,7 +416,7 @@ for (week in seq(17)) {
   sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"), week)
   for (pos in toupper(pos.list)) {
     pos_data = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
-    best_indexes = bestPartition(kTiers[pos], pos_data$actualPoints, pos_data$points)
+    best_indexes = bestPartition(kTiers[pos], pos_data$points, pos_data$points)
     tiers = expand(1:kTiers[pos], best_indexes, nrow(pos_data))
     tier_counts = sapply(1:kTiers[pos], function(tier) { c(week, pos, tier, length(tiers[tiers == tier])) })
     tier_df = rbind(tier_df, t(tier_counts))

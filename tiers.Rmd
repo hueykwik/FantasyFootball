@@ -95,6 +95,7 @@ than a lower tier.
 ```{r}
 computeAccuracy = function(scores, tiers) {
   n_tiers = length(unique(tiers))
+  if (n_tiers == 0) browser()
   n_correct = 0
   n_comparisons = 0
   
@@ -133,7 +134,7 @@ set of tiers, i.e. Week 17.
 tier_ecr_accuracy = data.frame()
 tier_proj_accuracy = data.frame()
 
-read_score_data = function(path) {
+read_score_data = function(path, week) {
   sdf = read_csv(path)
   sdf$Week = week
   sdf$actualPoints[sdf$actualPoints == "null"] = 0
@@ -186,7 +187,7 @@ joinECRScores = function(ecr_df, all_pos_df, pos) {
 plot = FALSE
 for (week in seq(17)) {
   # Parser warnings are due to trailing comma at the end of each row
-  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
+  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"), week)
   
   week_tier_ecr_accuracy = c()
   week_tier_proj_accuracy = c()
@@ -282,22 +283,22 @@ are dead. However, the 2013 season is available so I might try that next.
 Instead, we create bootstrap samples for the 2015 season and then see how well
 each method performs.
 
-```{r}
-set.seed(1)
-n = 1000
-results_df = data.frame()
-for (week in seq(17)) {
-   sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
-   print(week)
-   row = c()
-   for (pos in toupper(pos.list)) {
+```{r bootstrapping}
+
+bootstrapCompare = function(n) {
+  results_df = data.frame()
+  
+  for (week in seq(17)) {
+    sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"), week)
+    row = c()
+    for (pos in toupper(pos.list)) {
       n_proj_wins = 0
       pos_df = sdf %>% filter(position == pos)
       ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
       ecr_scores = joinECRScores(ecr_df, pos_df, pos) 
       for (i in seq(n)) {
         sample = ecr_scores[sample(nrow(ecr_scores), nrow(ecr_scores), replace = TRUE), ]
-   
+    
         pos_df = sample %>% filter(positionRank <= kCutoffs[pos])
         # select(pos_df, playername, points, actualPoints, TierProj)  # For debugging
         pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
@@ -305,20 +306,33 @@ for (week in seq(17)) {
         ## Calculate TierECR
         ecr_df = sample %>% arrange(Rank)
         ecr_df = ecr_df[1:kCutoffs[pos], ]
-        select(ecr_df, playername, points, actualPoints, Avg.Rank)  # For debugging
+        #select(ecr_df, playername, points, actualPoints, Avg.Rank)  # For debugging
         ecr_df$TierECR = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
-
+    
         acc = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
+        
         acc_ecr = computeAccuracy(ecr_df$actualPoints, ecr_df$TierECR)
         
         n_proj_wins = n_proj_wins + (acc > acc_ecr) 
       }
       row = c(row, n_proj_wins / n)
-   }
-   results_df = rbind(results_df, row)
+    }
+    results_df = rbind(results_df, row)
+  }
+  names(results_df) = toupper(pos.list)
+  sapply(results_df, mean)
 }
-names(results_df) = toupper(pos.list)
 ```
+
+```{r bootstrap results}
+rm(week)
+set.seed(1); bootstrapCompare(1)  # works
+set.seed(1); bootstrapCompare(10)  # works
+set.seed(1); bootstrapCompare(50)
+tiersset.seed(1); bootstrapCompare(100)
+set.seed(1); bootstrapCompare(200)
+```
+
 
 What % of time does TierProjections perform better than TierECR?
 # Random partioning into tiers
@@ -385,7 +399,7 @@ kTries = 2000  # Make smaller for debugging
 tier_df = data.frame()
 for (week in seq(17)) {
   # Parser warnings are due to trailing comma at the end of each row
-  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
+  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"), week)
   for (pos in toupper(pos.list)) {
     pos_data = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
     best_indexes = bestPartition(kTiers[pos], pos_data$actualPoints, pos_data$points)
@@ -451,7 +465,7 @@ expand_by_counts(letters[1:4], c(1,2,1,4))  # abbcdddd
 tier_part_accuracy = data.frame()
 for (week in seq(17)) {
   # Parser warnings are due to trailing comma at the end of each row
-  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"))
+  sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"), week)
   
   week_tier_part_accuracy = c()
   

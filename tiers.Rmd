@@ -169,13 +169,8 @@ computeTierECRs = function(ranks, k) {
   fit = Mclust(ranks, G = k)
   tiers = factor(fit$classification)
   
-  # Sometimes there is a gap between tiers, e.g. 1 1 2 2 4
-  # Remove it
+  # Remove any potential gap between tiers, e.g. 1 1 2 2 4
   levels(tiers) = 1:length(unique(fit$classification))
-  
-  # fit = Mclust(ecr_df$Avg.Rank, G = kTiers[pos])
-  # ecr_df$TierECR = factor(fit$classification)
-  #   levels(ecr_df$TierECR) = 1:length(unique(fit$classification))
   
   return(tiers)
 }

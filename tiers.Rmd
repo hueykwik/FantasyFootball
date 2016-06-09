@@ -95,7 +95,12 @@ than a lower tier.
 ```{r}
 computeAccuracy = function(scores, tiers) {
   n_tiers = length(unique(tiers))
-  if (n_tiers == 0) browser()
+  
+  # It's possible the clustering algorith does not find tiers, especially
+  # on bootstrapped data.
+  if (n_tiers == 1) {
+    return(0)
+  }
   n_correct = 0
   n_comparisons = 0
   
@@ -155,12 +160,13 @@ computeTiers = function(scores, k, reverse = FALSE) {
   while (is.null(clusters)) {
     tryCatch({ 
       clusters = Mclust(scores, G = k)
+      n_clusters = length(unique(clusters$classification))
     }, 
     warning = function(w) { warning(w); return(NULL) },
     error = function(e) { warning(e); return(NULL) })
     
     if (!is.null(clusters)) break 
-    k = k -1
+    k = k - 1
   }
   
   n_clusters = length(unique(clusters$classification))
@@ -320,19 +326,27 @@ bootstrapCompare = function(n) {
     results_df = rbind(results_df, row)
   }
   names(results_df) = toupper(pos.list)
-  sapply(results_df, mean)
+  return(results_df)
 }
 ```
 
-```{r bootstrap results}
-rm(week)
-set.seed(1); bootstrapCompare(1)  # works
-set.seed(1); bootstrapCompare(10)  # works
-set.seed(1); bootstrapCompare(50)
-tiersset.seed(1); bootstrapCompare(100)
-set.seed(1); bootstrapCompare(200)
-```
+Interesting conclusion from bootstrapping: it seems like GMM based on projections
+does worse! It does better for RBs and WRs, but worse on QBs/TEs/Ks, and substantially
+worse on Defense.
 
+```{r bootstrap results}
+# set.seed(1); n1 = bootstrapCompare(1)  #  w
+# set.seed(1); n10 = bootstrapCompare(10)  # w
+# set.seed(1); n50 = bootstrapCompare(50)  # w
+# set.seed(1); n100 = bootstrapCompare(100)  #
+# set.seed(1); n200 = bootstrapCompare(200) # w
+# set.seed(1); n500 = bootstrapCompare(500) # w
+# set.seed(1); n1000 = bootstrapCompare(1000)
+
+# sapply(n1000, mean)
+#       QB        RB        WR        TE         K       DST 
+#0.4953529 0.5107647 0.5514706 0.5035882 0.4959412 0.3998824 
+```
 
 What % of time does TierProjections perform better than TierECR?
 # Random partioning into tiers
@@ -460,7 +474,7 @@ we'll just create an additional tier to put them in.
 expand_by_counts = function(tiers, counts) {
   unlist(sapply(1:length(tiers), function(i) { rep(tiers[i], counts[i]) }))
 }
-expand_by_counts(letters[1:4], c(1,2,1,4))  # abbcdddd
+# expand_by_counts(letters[1:4], c(1,2,1,4))  # abbcdddd
 
 tier_part_accuracy = data.frame()
 for (week in seq(17)) {

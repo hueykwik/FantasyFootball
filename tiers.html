@@ -164,6 +164,12 @@ $(document).ready(function () {
 <p><a href="http://www.borischen.co/2013/11/week-10-retrospective.html">Tier accuracy</a> is defined as the percentage of time a higher tier results in a higher median score than a lower tier.</p>
 <pre class="r"><code>computeAccuracy = function(scores, tiers) {
   n_tiers = length(unique(tiers))
+  
+  # It's possible the clustering algorith does not find tiers, especially
+  # on bootstrapped data.
+  if (n_tiers == 1) {
+    return(0)
+  }
   n_correct = 0
   n_comparisons = 0
   
@@ -199,7 +205,7 @@ $(document).ready(function () {
 <pre class="r"><code>tier_ecr_accuracy = data.frame()
 tier_proj_accuracy = data.frame()
 
-read_score_data = function(path) {
+read_score_data = function(path, week) {
   sdf = read_csv(path)
   sdf$Week = week
   sdf$actualPoints[sdf$actualPoints == &quot;null&quot;] = 0
@@ -207,47 +213,53 @@ read_score_data = function(path) {
   return(sdf)
 }
 
-read_ecr_data = function(path, n_players) {
-  ecr_df = read_tsv(path) %&gt;% arrange()
-  ecr_df = ecr_df[1:n_players, ]  # The data is ordered from best rank to worst rank  
+read_ecr_data = function(path) {
+  ecr_df = read_tsv(path) 
   names(ecr_df) = make.names(names(ecr_df))
   return(ecr_df)
 }
 
-# returns a factor
-computeTierProjections = function(points, k) {
-  clusters = Mclust(points, G = k)
-  n_clusters = length(unique(clusters$classification))
-  
-  # Sometimes the model isn't able to fit K clusters
-  while (n_clusters == 0) {
+computeTiers = function(scores, k, reverse = FALSE) {
+  # reverse: Useful for clustering on projected points. We want highest projected points to be rank 1, so 
+  # we reverse the levels.
+  clusters = NULL
+  while (is.null(clusters)) {
+    tryCatch({ 
+      clusters = Mclust(scores, G = k)
+      n_clusters = length(unique(clusters$classification))
+    }, 
+    warning = function(w) { warning(w); return(NULL) },
+    error = function(e) { warning(e); return(NULL) })
+    
+    if (!is.null(clusters)) break 
     k = k - 1
-    clusters = Mclust(points, G = k)
-    n_clusters = length(unique(clusters$classification))
   }
   
-  # Reversing so that highest projected points gets Tier 1 
+  n_clusters = length(unique(clusters$classification))
   tiers = factor(clusters$classification)
-  levels(tiers) = rev(levels(tiers))
-  levels(tiers) = n_clusters:1
-  
+  if (reverse) {
+    levels(tiers) = rev(levels(tiers))
+    levels(tiers) = n_clusters:1
+  } else {
+    levels(tiers) = 1:n_clusters
+  }
+    
   return(tiers)
 }
 
-computeTierECRs = function(ranks, k) {
-  fit = Mclust(ranks, G = k)
-  tiers = factor(fit$classification)
-  
-  # Remove any potential gap between tiers, e.g. 1 1 2 2 4
-  levels(tiers) = 1:length(unique(fit$classification))
-  
-  return(tiers)
+joinECRScores = function(ecr_df, all_pos_df, pos) {
+  if (pos == &quot;DST&quot;) {
+    ecr_scores = inner_join(ecr_df, all_pos_df, by = c(&quot;Team&quot; = &quot;team&quot;))
+  } else {
+    ecr_scores = inner_join(ecr_df, all_pos_df, by = c(&quot;Player.Name&quot; = &quot;playername&quot;))
+  }
+  return(ecr_scores)
 }
 
 plot = FALSE
 for (week in seq(17)) {
   # Parser warnings are due to trailing comma at the end of each row
-  sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;))
+  sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;), week)
   
   week_tier_ecr_accuracy = c()
   week_tier_proj_accuracy = c()
@@ -257,12 +269,12 @@ for (week in seq(17)) {
     
     ## Calculate TierProj
     pos_df = sdf %&gt;% filter(position == pos, positionRank &lt;= kCutoffs[pos])
-    pos_df$TierProj = computeTierProjections(pos_df$points, kTiers[pos])
+    pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
     
     ## Calculate TierECR
-      
-    ecr_df = read_ecr_data(fn$identity(&quot;data/2015/week_`week`_`tolower(pos)`.tsv&quot;), kCutoffs[pos])
-    ecr_df$TierECR = computeTierECRs(ecr_df$Avg.Rank, kTiers[pos])
+    ecr_df = read_ecr_data(fn$identity(&quot;data/2015/week_`week`_`tolower(pos)`.tsv&quot;))
+    ecr_df = ecr_df[1:kCutoffs[pos], ]  # The data is ordered from best rank to worst rank  
+    ecr_df$TierECR = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
     
     if (plot) {
       ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
@@ -288,12 +300,8 @@ for (week in seq(17)) {
       ggsave(file = out_path, width = 9.5, height = 8, dpi = 150)
     }
     
-    if (pos == &quot;DST&quot;) {
-      ecr_scores = inner_join(ecr_df, pos_df, by = c(&quot;Team&quot; = &quot;team&quot;))
-    } else {
-      all_pos_df = sdf %&gt;% filter(position == pos)
-      ecr_scores = inner_join(ecr_df, all_pos_df, by = c(&quot;Player.Name&quot; = &quot;playername&quot;))
-    }
+    all_pos_df = sdf %&gt;% filter(position == pos)
+    ecr_scores = joinECRScores(ecr_df, all_pos_df, pos)
     
     acc = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
     acc_ecr = computeAccuracy(ecr_scores$actualPoints, ecr_scores$TierECR)
@@ -312,7 +320,7 @@ for (week in seq(17)) {
 <div id="results" class="section level1">
 <h1>Results</h1>
 <p>Define: For consistency, “TierProjections” will refer to creating tiers based on projected scores, and “TierECR” will refer to creating tiers based on Expert Consensus Rank.</p>
-<p>It appears that clustering based off of projections performs slightly better. For instance, TierProjections performs better on QBs, RBs, WRs, TEs, and Kickers, whereas TierECR performs better on Defense. Note that tier accuracy for Kickers is near 50%, which suggests streaming kickers is a good idea.</p>
+<p>It appears that clustering based off of projections performs slightly better for all positions. Note that tier accuracy for Kickers is near 50%, which suggests that streaming kickers is a good idea.</p>
 <pre class="r"><code>  round(tier_proj_accuracy * 100, 1)</code></pre>
 <pre><code>##      QB    RB    WR    TE    K   DST
 ## 1  73.3  67.9  76.4  78.6 33.3  80.0
@@ -334,17 +342,17 @@ for (week in seq(17)) {
 ## 17 71.4 100.0  86.7  50.0 33.3  66.7</code></pre>
 <pre class="r"><code>  round(tier_ecr_accuracy * 100, 1)</code></pre>
 <pre><code>##      QB   RB   WR   TE    K   DST
-## 1  76.2 67.9 72.7 78.6 20.0  70.0
-## 2  60.0 44.4 80.3 46.4 70.0  46.7
+## 1  76.2 67.9 72.7 78.6 20.0  66.7
+## 2  60.0 44.4 80.3 46.4 70.0  40.0
 ## 3  60.7 69.4 83.3 61.9 70.0  46.7
-## 4  42.9 58.3 51.5 53.6 50.0  40.0
+## 4  42.9 58.3 51.5 53.6 50.0  33.3
 ## 5  60.7 55.6 76.4 35.7 30.0  60.0
-## 6  64.3 88.9 80.3 90.5 50.0  60.0
-## 7  71.4 89.3 68.2 64.3 60.0  80.0
-## 8  57.1 77.8 69.7 61.9 70.0  66.7
+## 6  64.3 88.9 80.3 90.5 50.0  40.0
+## 7  71.4 89.3 68.2 64.3 60.0  73.3
+## 8  57.1 77.8 69.7 61.9 70.0  73.3
 ## 9  75.0 66.7 81.8 85.7 20.0  66.7
-## 10 75.0 85.7 78.8 61.9 10.0  46.7
-## 11 64.3 44.4 71.2 50.0 40.0  60.0
+## 10 75.0 85.7 78.8 61.9 10.0  40.0
+## 11 64.3 44.4 71.2 50.0 40.0  66.7
 ## 12 39.3 80.6 64.4 89.3 80.0  70.0
 ## 13 75.0 67.9 72.7 71.4 20.0  73.3
 ## 14 81.0 77.8 78.8 61.9 80.0  70.0
@@ -359,24 +367,61 @@ for (week in seq(17)) {
 ## 65.2 75.5 75.1 71.1 50.2 62.2</code></pre>
 <pre class="r"><code>  round(mean_tier * 100, 1)</code></pre>
 <pre><code>##   QB   RB   WR   TE    K  DST 
-## 63.4 70.2 72.5 65.5 46.1 64.1</code></pre>
+## 63.4 70.2 72.5 65.5 46.1 62.0</code></pre>
 <p>To get a better sense of how these two algorithms compete on more data, there are two approaches we can take.</p>
 <p>The most obvious approach is to look at historical data. Unfortunately, FantasyPros does not keep a record of ECR from past seasons. I tried using the <a href="https://archive.org/web/">Wayback Machine</a>, but there simply were not enough snapshots to make this worthwhile.</p>
 <p>Chen has published tiers for the 2013-2015 seasons on his blog, but the data isn’t always available. For instance, some of the links to the tiers in the 2014 season are dead. However, the 2013 season is available so I might try that next.</p>
 <p>Instead, we create bootstrap samples for the 2015 season and then see how well each method performs.</p>
-<pre class="r"><code># 
-# for score_data {
-#   n = 1000
-#   for (i in 1:n) {
-#     score_data = score_data[sample(nrow, nrow, replace = TRUE), ]
-#     compute tiers and accuracy ecr
-#     compute tiers and accuracy proj
-#     
-#     n_proj_wins = acc_proj &gt; acc_ecr
-#     store the comparison
-#   }
-#   n_proj_wins / n 
-# }</code></pre>
+<pre class="r"><code>bootstrapCompare = function(n) {
+  results_df = data.frame()
+  
+  for (week in seq(17)) {
+    sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;), week)
+    row = c()
+    for (pos in toupper(pos.list)) {
+      n_proj_wins = 0
+      pos_df = sdf %&gt;% filter(position == pos)
+      ecr_df = read_ecr_data(fn$identity(&quot;data/2015/week_`week`_`tolower(pos)`.tsv&quot;))
+      ecr_scores = joinECRScores(ecr_df, pos_df, pos) 
+      for (i in seq(n)) {
+        sample = ecr_scores[sample(nrow(ecr_scores), nrow(ecr_scores), replace = TRUE), ]
+    
+        pos_df = sample %&gt;% filter(positionRank &lt;= kCutoffs[pos])
+        # select(pos_df, playername, points, actualPoints, TierProj)  # For debugging
+        pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
+    
+        ## Calculate TierECR
+        ecr_df = sample %&gt;% arrange(Rank)
+        ecr_df = ecr_df[1:kCutoffs[pos], ]
+        #select(ecr_df, playername, points, actualPoints, Avg.Rank)  # For debugging
+        ecr_df$TierECR = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
+    
+        acc = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
+        
+        acc_ecr = computeAccuracy(ecr_df$actualPoints, ecr_df$TierECR)
+        
+        n_proj_wins = n_proj_wins + (acc &gt; acc_ecr) 
+      }
+      row = c(row, n_proj_wins / n)
+    }
+    results_df = rbind(results_df, row)
+  }
+  names(results_df) = toupper(pos.list)
+  return(results_df)
+}</code></pre>
+<p>Interesting conclusion from bootstrapping: it seems like GMM based on projections does worse! It does better for RBs and WRs, but worse on QBs/TEs/Ks, and substantially worse on Defense.</p>
+<pre class="r"><code>rm(week)
+# set.seed(1); n1 = bootstrapCompare(1)  #  w
+# set.seed(1); n10 = bootstrapCompare(10)  # w
+# set.seed(1); n50 = bootstrapCompare(50)  # w
+# set.seed(1); n100 = bootstrapCompare(100)  #
+# set.seed(1); n200 = bootstrapCompare(200) # w
+# set.seed(1); n500 = bootstrapCompare(500) # w
+# set.seed(1); n1000 = bootstrapCompare(1000)
+
+# sapply(n1000, mean)
+#       QB        RB        WR        TE         K       DST 
+#0.4953529 0.5107647 0.5514706 0.5035882 0.4959412 0.3998824 </code></pre>
 <p>What % of time does TierProjections perform better than TierECR? # Random partioning into tiers</p>
 <p>Here we explore another way to generate tiers. Instead of applying GMM on the list of ordered projections, we compute many different random tiers.</p>
 <p>Using the accuracy (as defined above) as a cost function, we pick the partition that provides the best accuracy.</p>
@@ -428,7 +473,7 @@ kTries = 2000  # Make smaller for debugging
 tier_df = data.frame()
 for (week in seq(17)) {
   # Parser warnings are due to trailing comma at the end of each row
-  sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;))
+  sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;), week)
   for (pos in toupper(pos.list)) {
     pos_data = sdf %&gt;% filter(position == pos, positionRank &lt;= kCutoffs[pos]) %&gt;% arrange(desc(points))
     best_indexes = bestPartition(kTiers[pos], pos_data$actualPoints, pos_data$points)
@@ -476,7 +521,7 @@ expand_by_counts(letters[1:4], c(1,2,1,4))  # abbcdddd</code></pre>
 <pre class="r"><code>tier_part_accuracy = data.frame()
 for (week in seq(17)) {
   # Parser warnings are due to trailing comma at the end of each row
-  sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;))
+  sdf = read_score_data(fn$identity(&quot;data/2015/FFA-CustomRankings-Week-`week`.csv&quot;), week)
   
   week_tier_part_accuracy = c()
   

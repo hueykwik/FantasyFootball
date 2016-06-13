@@ -237,7 +237,7 @@ plot = FALSE
 
 tic(quiet = FALSE)
 set.seed(1) 
-kTries = 1  #200000
+kTries = 10000  #200000
 for (week in seq(17)) {
   # print(paste("Week: ", week))
   # Parser warnings are due to trailing comma at the end of each row
@@ -251,12 +251,24 @@ for (week in seq(17)) {
     # print(paste("Position: ", pos))
     
     ## Calculate TierProj
-    pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos])
+    pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
+    #pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos])
+    
     pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
+    
+    # debugging
+    #select(pos_df, playername, points, actualPoints, positionRank, TierProj) 
     
     ## Calculate TierProjRandomPartition
     best_indexes = bestPartition(kTiers[pos], pos_df$points, kTries)
-    tier_proj_random = expand(1:kTiers[pos], best_indexes, nrow(pos_df))
+    pos_df$TierProjRandom = expand(1:kTiers[pos], best_indexes, nrow(pos_df))
+    
+    # Write out to files
+    out_dir = fn$identity("out/`kYear`/week`week`/csv/")
+    out_path = fn$identity("`out_dir`week-`week`-`pos`.csv")
+    dir.create(out_dir, recursive = TRUE)
+  
+    write_csv(select(pos_df, playername, points, actualPoints, TierProj, TierProjRandom), out_path)
     
     ## Calculate TierECR
     ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
@@ -291,7 +303,7 @@ for (week in seq(17)) {
     ecr_scores = joinECRScores(ecr_df, all_pos_df, pos)
     
     acc_proj = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
-    acc_proj_random = computeAccuracy(pos_df$actualPoints, tier_proj_random)
+    acc_proj_random = computeAccuracy(pos_df$actualPoints, pos_df$TierProjRandom)
     acc_ecr = computeAccuracy(ecr_scores$actualPoints, ecr_scores$TierECR)
     
     week_tier_proj_accuracy  = c(week_tier_proj_accuracy, acc_proj)

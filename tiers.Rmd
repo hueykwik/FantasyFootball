@@ -130,7 +130,7 @@ Here I compare clusters generated from ECR to those generated from projections.
 
 Caveats
 
-* TierECR doesn't match Chen's completely. 
+* TierRank doesn't match Chen's completely. 
   * This is because his site only the latest
 set of tiers, i.e. Week 17. 
   * He also uses visual inspection to determine the number of clusters and will
@@ -190,6 +190,7 @@ read_score_data = function(path, week) {
 read_ecr_data = function(path) {
   ecr_df = read_tsv(path) 
   names(ecr_df) = make.names(names(ecr_df))
+  ecr_df$Team[ecr_df$Team == "LA"] = "STL"  # FantasyPros changed STL to LA
   return(ecr_df)
 }
 
@@ -219,6 +220,21 @@ computeTiers = function(scores, k, reverse = FALSE) {
   }
     
   return(tiers)
+}
+
+createProjectionPlot = function(pos_df, players_to_label) {
+  names(pos_df)[25] = "Tier"
+  pos_df$Tier = factor(pos_df$Tier, levels = rev(levels(pos_df$Tier)))
+  p = ggplot(pos_df, aes(x = positionRank, y = points))
+  p = p + geom_point(aes(colour=Tier)) + geom_text_repel(aes(label=playername, colour=Tier), data = subset(pos_df, playername %in% players_to_label))
+  p = p + scale_x_continuous("Position Rank")
+  p = p + ylab("Projected Points")
+  p 
+}
+
+createWeek17QBPlot = function(pos_df) {
+  players_to_label <- c("Cam Newton", "Ben Roethlisberger", "Drew Brees", "Ryan Fitzpatrick", "Derek Carr", "Brock Osweiler", "Ryan Tannehill", "Zach Mettenberger")
+  createProjectionPlot(pos_df, players_to_label)
 }
 
 joinECRScores = function(ecr_df, all_pos_df, pos) {
@@ -270,12 +286,20 @@ for (week in seq(17)) {
   
     write_csv(select(pos_df, playername, points, actualPoints, TierProj, TierProjRandom), out_path)
     
-    ## Calculate TierECR
+    ## Calculate TierRank
     ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
     ecr_df = ecr_df[1:kCutoffs[pos], ]  # The data is ordered from best rank to worst rank  
-    ecr_df$TierECR = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
+    ecr_df$TierRank = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
     
     if (plot) {
+      p = ggplot(pos_df, aes(x = positionRank, y = points))
+      p = p + geom_text(aes(label=playername, colour=TierProj), size=font,  position = position_jitter(width = 0.25, height = 0.25))
+      p = p + scale_x_continuous("Position Rank")
+      p = p + ylab("Projected Points")
+      p
+      
+      createWeek17QBPlot(pos_df)
+      
       ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
       
       # Calculate position rank, negative so lowest rank will be on top in the plot
@@ -285,9 +309,9 @@ for (week in seq(17)) {
       # We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
       # coordinates.
       p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
-      p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierECR), size=barsize*0.8, alpha=0.4)
+      p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierRank), size=barsize*0.8, alpha=0.4)
       p = p + coord_flip()
-      p = p + geom_text(aes(label=Player.Name, colour=TierECR, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
+      p = p + geom_text(aes(label=Player.Name, colour=TierRank, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
       p = p + scale_x_continuous("Expert Consensus Rank")
       p = p + ylab("Average Expert Rank")
       #p
@@ -304,7 +328,7 @@ for (week in seq(17)) {
     
     acc_proj = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
     acc_proj_random = computeAccuracy(pos_df$actualPoints, pos_df$TierProjRandom)
-    acc_ecr = computeAccuracy(ecr_scores$actualPoints, ecr_scores$TierECR)
+    acc_ecr = computeAccuracy(ecr_scores$actualPoints, ecr_scores$TierRank)
     
     week_tier_proj_accuracy  = c(week_tier_proj_accuracy, acc_proj)
     week_tier_ecr_accuracy = c(week_tier_ecr_accuracy, acc_ecr)
@@ -326,7 +350,7 @@ toc()
 
 Define: 
 For consistency, "TierProjections" will refer to creating tiers based on projected
-scores, and "TierECR" will refer to creating tiers based on Expert Consensus Rank. 
+scores, and "TierRank" will refer to creating tiers based on Expert Consensus Rank. 
 
 It appears that clustering based off of projections performs slightly better for
 all positions. Note that tier accuracy for Kickers is near 50%, which suggests 
@@ -349,6 +373,8 @@ that streaming kickers is a good idea.
   # round(tier_proj_random_accuracy * 100, 1)
   # mean_proj_random = sapply(tier_proj_random_accuracy, mean)
   # round(mean_proj_random * 100, 1)
+  
+  mean_tier
 ```
 
 To get a better sense of how these two algorithms compete on more data, there 
@@ -387,17 +413,18 @@ bootstrapCompare = function(n) {
         pos_df = pos_df[1:kCutoffs[pos], ]
         # select(pos_df, Player.Name, points, actualPoints)  # For debugging
         pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
-        # select(pos_df, Player.Name, points, actualPoints, TierProj)
+        select(pos_df, Player.Name, points, TierProj)
         
-        ## Calculate TierECR
+        ## CalculateTierRank
         ecr_df = sample %>% arrange(Rank)
         ecr_df = ecr_df[1:kCutoffs[pos], ]
         #select(ecr_df, Player.Name, points, actualPoints, Avg.Rank)  # For debugging
-        ecr_df$TierECR = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
-    
+        ecr_df$TierRank = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
+        select(ecr_df, Player.Name, Avg.Rank, TierRank)
+        
         acc = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
         
-        acc_ecr = computeAccuracy(ecr_df$actualPoints, ecr_df$TierECR)
+        acc_ecr = computeAccuracy(ecr_df$actualPoints, ecr_df$TierRank)
         
         n_proj_wins = n_proj_wins + (acc > acc_ecr) 
       }
@@ -419,7 +446,7 @@ set.seed(1); n1 = bootstrapCompare(1)  #  w
 # set.seed(1); n10 = bootstrapCompare(10)  # w
 # set.seed(1); n50 = bootstrapCompare(50)  # w
 set.seed(1); n100 = bootstrapCompare(100)  #
-# set.seed(1); n200 = bootstrapCompare(200) # w
+n1# set.seed(1); n200 = bootstrapCompare(200) # w
 # set.seed(1); n500 = bootstrapCompare(500) # w
 set.seed(1); n1000 = bootstrapCompare(1000)
 tic()
@@ -431,7 +458,7 @@ toc()
 #0.4953529 0.5107647 0.5514706 0.5035882 0.4959412 0.3998824 
 ```
 
-What % of time does TierProjections perform better than TierECR?
+What % of time does TierProjections perform better than TierRank?
 # Random partioning into tiers
 
 Here we explore another way to generate tiers. Instead of applying GMM on the 

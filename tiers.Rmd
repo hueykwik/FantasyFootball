@@ -15,15 +15,15 @@ library(mclust)
 library(gsubfn)
 library(XML)
 library(tictoc)
+library(ggrepel)
 
 source("util.R")
+source("tier-functions.R")
 
 # Initialize constants
 pos.list = c('qb','rb','wr','te','k','dst')
 
 kYear = 2015
-kCutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
-kTiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
 
 # Plotting
 font = 3.5
@@ -33,26 +33,13 @@ dotsize = 2
 
 # Introduction
 
-A couple years ago, I encountered a [New York Times article](http://nyti.ms/1t6Bgc3) 
-by Boris Chen that explained a way to use machine learning to improve your starting lineup 
-in fantasy football. 
-
-Every week, legions of fantasy football experts come up with their lists of player
-rankings. [FantasyPros](https://www.fantasypros.com/) aggregates these and comes up with an Expert Conensus Ranking. 
-Chen applies a [Gaussian mixture model](http://bit.ly/1VKWt6S) to the rankings, 
-which produces tiers of similarly ranked players. 
-
-The tiers lend themselves to easier decision-making. For instance, one should draft
-players in higher tiers versus other popular tactics, e.g. filling a specific position
-early.
-
-In this project, I show that we can improve upon these tiers by clustering based
-on projected points instead of ECR. When run against the 2015 season data, my 
-technique seems to perform better.
+This builds upon Boris Chen's work in applying Gaussian Mixture Models to fantasy
+football data. Instead of applying GMM to rankings, we apply them to projected 
+scores. 
 
 ## Grabbing Data
 
-In order to do this project, I needed the following data for the 2015 season:
+I needed the following data for the 2015 season:
 
 * Projected and actual scores from [Fantasy Football Analytics](apps.fantasyfootballanalytics.net/projections)
 * Expert Consensus Rankings from FantasyPros.
@@ -83,8 +70,94 @@ download.data = function(week, pos.list) {
   }	  
 }
 
-# TODO(huey): Error when trying to download using knitr, but works otherwise.
+#  Error when trying to download using knitr, but works otherwise.
 # sapply(1:17, function(week) download.data(week))
+```
+
+## Rank Tier example
+
+Since Chen’s blog doesn’t have published tiers for Weeks 1–16, I used Chen’s code to generate Rank Tiers myself.
+I stuck to the default number of tiers used in his code, but it’s possible that the tiers I generated differ slightly from the ones that were published on his blog during the season.
+
+```{r computeTiers util function}
+kCutoffs = c(QB = 24, RB = 40, WR = 60, TE = 24, K = 24, DST = 24)
+kTiers = c(QB = 8, RB = 9, WR = 12, TE = 8, K = 5, DST = 6)
+
+computeTiers = function(scores, k, reverse = FALSE) {
+  # reverse: Useful for clustering on projected points. We want highest projected points to be rank 1, so 
+  # we reverse the levels.
+  clusters = NULL
+  while (is.null(clusters)) {
+    tryCatch({ 
+      clusters = Mclust(scores, G = k)
+      n_clusters = length(unique(clusters$classification))
+    }, 
+    warning = function(w) { warning(w); return(NULL) },
+    error = function(e) { warning(e); return(NULL) })
+    
+    if (!is.null(clusters)) break 
+    k = k - 1
+  }
+  
+  n_clusters = length(unique(clusters$classification))
+  tiers = factor(clusters$classification)
+  if (reverse) {
+    levels(tiers) = rev(levels(tiers))
+    levels(tiers) = n_clusters:1
+  } else {
+    levels(tiers) = 1:n_clusters
+  }
+    
+  return(tiers)
+}
+```
+
+The tiers we generate should look pretty similar to what we see on Chen's site.
+```{r rankTier example, warning = FALSE}
+week = 17
+pos = "QB"
+
+ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
+ecr_df = ecr_df[1:kCutoffs[pos], ]  # The data is ordered from best rank to worst rank  
+ecr_df$TierRank = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
+
+ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
+
+# Calculate position rank, negative so lowest rank will be on top in the plot
+# below
+ecr_df$position.rank = -seq(nrow(ecr_df))
+
+# We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
+# coordinates.
+p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
+p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierRank), size=barsize*0.8, alpha=0.4)
+p = p + coord_flip()
+p = p + geom_text(aes(label=Player.Name, colour=TierRank, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
+p = p + scale_x_continuous("Expert Consensus Rank")
+p = p + ylab("Average Expert Rank")
+p
+```
+
+## Projection Tier Example
+
+Similarly, here is an example of computing tiers based on projections.
+```{r, warning = FALSE}
+
+sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"), week)
+pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
+
+pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
+pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
+
+players_to_label = c("Cam Newton", "Ben Roethlisberger", "Drew Brees", "Ryan Fitzpatrick", "Derek Carr", "Brock Osweiler", "Ryan Tannehill", "Zach Mettenberger")
+
+names(pos_df)[25] = "Tier"
+pos_df$Tier = factor(pos_df$Tier, levels = rev(levels(pos_df$Tier)))
+p = ggplot(pos_df, aes(x = positionRank, y = points))
+p = p + geom_point(aes(colour=Tier)) + geom_text_repel(aes(label=playername, colour=Tier), data = subset(pos_df, playername %in% players_to_label))
+p = p + scale_x_continuous("Position Rank")
+p = p + ylab("Projected Points")
+p 
 ```
 
 ## Evaluating Accuracy
@@ -93,7 +166,7 @@ download.data = function(week, pos.list) {
 is defined as the percentage of time a higher tier results in a higher median score 
 than a lower tier.
 
-```{r}
+```{r computeAccuracy}
 computeAccuracy = function(scores, tiers) {
   n_tiers = length(unique(tiers))
   
@@ -125,117 +198,11 @@ computeAccuracy = function(scores, tiers) {
 }
 ```
 
-# Computing Tiers
-Here I compare clusters generated from ECR to those generated from projections.
-
-Caveats
-
-* TierRank doesn't match Chen's completely. 
-  * This is because his site only the latest
-set of tiers, i.e. Week 17. 
-  * He also uses visual inspection to determine the number of clusters and will
-  change them each week (he publishes a new set of tiers each week)
+# Computing accuracy for Rank Tiers and Projection Tiers
+Here we compute the accuracy for all weeks of the 2015 season. In the code below,
+we also try many random partitions.
 
 ```{r 2015, warning = FALSE}
-
-randomPartition = function(k, len) {
-  indexes = sample(seq(len-1), k-1)
-  return(sort(indexes))
-}
-
-expand = function(tiers, indexes, len) {
-# expand(letters[1:4], c(1,2,3), 5)  # abcdd
-# expand(letters[1:4], c(1,3,4), 5)  # abbcd
-# expand(letters[1:4], c(1,3,4), 5)  # abbcdd
-  vec = vector("list", len)
-  k = length(indexes)
-  start = 1
-  for (i in seq(k)) {
-    idx = indexes[i]
-    vec[start:idx] = tiers[i]
-    start = idx + 1 
-  }
-  vec[start:len] = tiers[i+1]
-  return(unlist(vec))
-}
-
-bestPartition = function(k, points, tries) {
-  # Usage example: (also suggest setting seed for reproducibility)
-  # test_df = ecr_scores %>% select(playername, points, actualPoints) %>% arrange(desc(points))
-  # bestPartition(7, test_df$actualPoints, test_df$points)
-
-  max_acc = -1
-  best_indexes = c()
-  len = length(points)
-  for (i in seq(tries)) {
-    indexes = randomPartition(k, len)
-    tier = expand(1:k, indexes, len)
-    acc = computeAccuracy(points, tier)
-    if (acc > max_acc) {
-      max_acc = acc
-      best_indexes = indexes
-    }
-  }
-  return (best_indexes)
-}
-
-read_score_data = function(path, week) {
-  sdf = read_csv(path)
-  sdf$Week = week
-  sdf$actualPoints[sdf$actualPoints == "null"] = 0
-  sdf$actualPoints = as.numeric(sdf$actualPoints)
-  return(sdf)
-}
-
-read_ecr_data = function(path) {
-  ecr_df = read_tsv(path) 
-  names(ecr_df) = make.names(names(ecr_df))
-  ecr_df$Team[ecr_df$Team == "LA"] = "STL"  # FantasyPros changed STL to LA
-  return(ecr_df)
-}
-
-computeTiers = function(scores, k, reverse = FALSE) {
-  # reverse: Useful for clustering on projected points. We want highest projected points to be rank 1, so 
-  # we reverse the levels.
-  clusters = NULL
-  while (is.null(clusters)) {
-    tryCatch({ 
-      clusters = Mclust(scores, G = k)
-      n_clusters = length(unique(clusters$classification))
-    }, 
-    warning = function(w) { warning(w); return(NULL) },
-    error = function(e) { warning(e); return(NULL) })
-    
-    if (!is.null(clusters)) break 
-    k = k - 1
-  }
-  
-  n_clusters = length(unique(clusters$classification))
-  tiers = factor(clusters$classification)
-  if (reverse) {
-    levels(tiers) = rev(levels(tiers))
-    levels(tiers) = n_clusters:1
-  } else {
-    levels(tiers) = 1:n_clusters
-  }
-    
-  return(tiers)
-}
-
-createProjectionPlot = function(pos_df, players_to_label) {
-  names(pos_df)[25] = "Tier"
-  pos_df$Tier = factor(pos_df$Tier, levels = rev(levels(pos_df$Tier)))
-  p = ggplot(pos_df, aes(x = positionRank, y = points))
-  p = p + geom_point(aes(colour=Tier)) + geom_text_repel(aes(label=playername, colour=Tier), data = subset(pos_df, playername %in% players_to_label))
-  p = p + scale_x_continuous("Position Rank")
-  p = p + ylab("Projected Points")
-  p 
-}
-
-createWeek17QBPlot = function(pos_df) {
-  players_to_label <- c("Cam Newton", "Ben Roethlisberger", "Drew Brees", "Ryan Fitzpatrick", "Derek Carr", "Brock Osweiler", "Ryan Tannehill", "Zach Mettenberger")
-  createProjectionPlot(pos_df, players_to_label)
-}
 
 joinECRScores = function(ecr_df, all_pos_df, pos) {
   if (pos == "DST") {
@@ -249,13 +216,11 @@ joinECRScores = function(ecr_df, all_pos_df, pos) {
 tier_ecr_accuracy = data.frame()
 tier_proj_accuracy = data.frame()
 tier_proj_random_accuracy = data.frame()
-plot = FALSE
 
 tic(quiet = FALSE)
 set.seed(1) 
-kTries = 200000  #200000
+kTries = 1 #200000  #200000
 for (week in seq(17)) {
-  # print(paste("Week: ", week))
   # Parser warnings are due to trailing comma at the end of each row
   sdf = read_score_data(fn$identity("data/2015/FFA-CustomRankings-Week-`week`.csv"), week)
   
@@ -264,64 +229,19 @@ for (week in seq(17)) {
   week_tier_proj_random_accuracy = c()
   
   for (pos in toupper(pos.list)) {
-    # print(paste("Position: ", pos))
-    
     ## Calculate TierProj
     pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos]) %>% arrange(desc(points))
-    #pos_df = sdf %>% filter(position == pos, positionRank <= kCutoffs[pos])
-    
+
     pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
-    
-    # debugging
-    #select(pos_df, playername, points, actualPoints, positionRank, TierProj) 
-    
+
     ## Calculate TierProjRandomPartition
     best_indexes = bestPartition(kTiers[pos], pos_df$points, kTries)
     pos_df$TierProjRandom = expand(1:kTiers[pos], best_indexes, nrow(pos_df))
-    
-    # Write out to files
-    out_dir = fn$identity("out/`kYear`/week`week`/csv/")
-    out_path = fn$identity("`out_dir`week-`week`-`pos`.csv")
-    dir.create(out_dir, recursive = TRUE)
-  
-    write_csv(select(pos_df, playername, points, actualPoints, TierProj, TierProjRandom), out_path)
-    
+
     ## Calculate TierRank
     ecr_df = read_ecr_data(fn$identity("data/2015/week_`week`_`tolower(pos)`.tsv"))
     ecr_df = ecr_df[1:kCutoffs[pos], ]  # The data is ordered from best rank to worst rank  
     ecr_df$TierRank = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
-    
-    if (plot) {
-      p = ggplot(pos_df, aes(x = positionRank, y = points))
-      p = p + geom_text(aes(label=playername, colour=TierProj), size=font,  position = position_jitter(width = 0.25, height = 0.25))
-      p = p + scale_x_continuous("Position Rank")
-      p = p + ylab("Projected Points")
-      p
-      
-      createWeek17QBPlot(pos_df)
-      
-      ecr_df$nchar = nchar(as.character(ecr_df$Player.Name))  # For formatting later
-      
-      # Calculate position rank, negative so lowest rank will be on top in the plot
-      # below
-      ecr_df$position.rank = -seq(nrow(ecr_df))
-      
-      # We put Avg.Rank as y because geom_errorbar requires ymin/ymax. We then flip the 
-      # coordinates.
-      p = ggplot(ecr_df, aes(x = position.rank, y = Avg.Rank))
-      p = p + geom_errorbar(aes(ymin = Avg.Rank - Std.Dev/2, ymax = Avg.Rank + Std.Dev/2, width=0.2, colour=TierRank), size=barsize*0.8, alpha=0.4)
-      p = p + coord_flip()
-      p = p + geom_text(aes(label=Player.Name, colour=TierRank, y = Avg.Rank - nchar/6 - Std.Dev/1.4), size=font)
-      p = p + scale_x_continuous("Expert Consensus Rank")
-      p = p + ylab("Average Expert Rank")
-      #p
-      
-      # Output the plots somewhere so I can look at them
-      out_dir = fn$identity("out/`kYear`/week`week`/png/")
-      out_path = fn$identity("`out_dir`week-`week`-`pos`.png")
-      dir.create(out_dir, recursive = TRUE)
-      ggsave(file = out_path, width = 9.5, height = 8, dpi = 150)
-    }
     
     all_pos_df = sdf %>% filter(position == pos)
     ecr_scores = joinECRScores(ecr_df, all_pos_df, pos)
@@ -348,14 +268,6 @@ toc()
 
 # Results
 
-Define: 
-For consistency, "TierProjections" will refer to creating tiers based on projected
-scores, and "TierRank" will refer to creating tiers based on Expert Consensus Rank. 
-
-It appears that clustering based off of projections performs slightly better for
-all positions. Note that tier accuracy for Kickers is near 50%, which suggests 
-that streaming kickers is a good idea.
-
 ```{r}
   round(tier_proj_accuracy * 100, 1)
   round(tier_ecr_accuracy * 100, 1)
@@ -368,14 +280,12 @@ that streaming kickers is a good idea.
   round(mean_proj * 100, 1)
   round(mean_tier * 100, 1)
   round(mean_proj_random * 100, 1)
-  
-  # # run this
-  # round(tier_proj_random_accuracy * 100, 1)
-  # mean_proj_random = sapply(tier_proj_random_accuracy, mean)
-  # round(mean_proj_random * 100, 1)
-  
-  mean_tier
 ```
+
+Projection Tiers outperform Rank Tiers for all the positions listed above for
+the 2015 season.
+
+# Bootstrapping
 
 To get a better sense of how these two algorithms compete on more data, there 
 are two approaches we can take. 
@@ -390,9 +300,9 @@ always available. For instance, some of the links to the tiers in the 2014 seaso
 are dead. However, the 2013 season is available so I might try that next.
 
 Instead, we create bootstrap samples for the 2015 season and then see how well
-each method performs.
+each method performs. 
 
-```{r bootstrapping}
+```{r bootstrapping, warning = FALSE}
 
 bootstrapCompare = function(n) {
   results_df = data.frame()
@@ -437,36 +347,11 @@ bootstrapCompare = function(n) {
 }
 ```
 
-Interesting conclusion from bootstrapping: it seems like GMM based on projections
-does worse! It does better for RBs and WRs, but worse on QBs/TEs/Ks, and substantially
-worse on Defense.
-
-```{r bootstrap results}
-set.seed(1); n1 = bootstrapCompare(1)  #  w
-# set.seed(1); n10 = bootstrapCompare(10)  # w
-# set.seed(1); n50 = bootstrapCompare(50)  # w
-set.seed(1); n100 = bootstrapCompare(100)  #
-n1# set.seed(1); n200 = bootstrapCompare(200) # w
-# set.seed(1); n500 = bootstrapCompare(500) # w
-set.seed(1); n1000 = bootstrapCompare(1000)
-tic()
-set.seed(1); n10000 = bootstrapCompare(10000)
-toc()
-
-# sapply(n1000, mean)
-#       QB        RB        WR        TE         K       DST 
-#0.4953529 0.5107647 0.5514706 0.5035882 0.4959412 0.3998824 
+```{r bootstrap results, warning = FALSE}
+set.seed(1)
+sapply(bootstrapCompare(100), mean)
 ```
 
-What % of time does TierProjections perform better than TierRank?
-# Random partioning into tiers
-
-Here we explore another way to generate tiers. Instead of applying GMM on the 
-list of ordered projections, we compute many different random tiers. 
-
-Using the accuracy (as defined above) as a cost function, we pick the partition
-that provides the best accuracy.
-
-Below are the utilty functions written to compute a random partition.
-
-
+The numbers above represent when Tier Projections was more accurate than Tier Ranks.
+Interestingly enough, Tier Projections seems to do better for QBs, RBs, and WRs, but worse for the other positions. 
+In particular, it performs significantly worse for Defense, but that seems to be corroborated by the fact that [projections perform worse than rankings for Defense (and Kickers)](http://fantasyfootballanalytics.net/2016/04/accuracy-of-rankings-vs-projections.html).

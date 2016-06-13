@@ -237,7 +237,7 @@ plot = FALSE
 
 tic(quiet = FALSE)
 set.seed(1) 
-kTries = 10000  #200000
+kTries = 200000  #200000
 for (week in seq(17)) {
   # print(paste("Week: ", week))
   # Parser warnings are due to trailing comma at the end of each row
@@ -422,7 +422,9 @@ set.seed(1); n100 = bootstrapCompare(100)  #
 # set.seed(1); n200 = bootstrapCompare(200) # w
 # set.seed(1); n500 = bootstrapCompare(500) # w
 set.seed(1); n1000 = bootstrapCompare(1000)
-set.seed(1); n10000 = bootstrapCompare(1000)
+tic()
+set.seed(1); n10000 = bootstrapCompare(10000)
+toc()
 
 # sapply(n1000, mean)
 #       QB        RB        WR        TE         K       DST 

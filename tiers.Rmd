@@ -382,14 +382,17 @@ bootstrapCompare = function(n) {
       for (i in seq(n)) {
         sample = ecr_scores[sample(nrow(ecr_scores), nrow(ecr_scores), replace = TRUE), ]
     
-        pos_df = sample %>% filter(positionRank <= kCutoffs[pos])
-        # select(pos_df, playername, points, actualPoints, TierProj)  # For debugging
+        #pos_df = sample %>% filter(positionRank <= kCutoffs[pos])
+        pos_df = sample %>% arrange(desc(points))
+        pos_df = pos_df[1:kCutoffs[pos], ]
+        # select(pos_df, Player.Name, points, actualPoints)  # For debugging
         pos_df$TierProj = computeTiers(pos_df$points, kTiers[pos], reverse = TRUE)
-    
+        # select(pos_df, Player.Name, points, actualPoints, TierProj)
+        
         ## Calculate TierECR
         ecr_df = sample %>% arrange(Rank)
         ecr_df = ecr_df[1:kCutoffs[pos], ]
-        #select(ecr_df, playername, points, actualPoints, Avg.Rank)  # For debugging
+        #select(ecr_df, Player.Name, points, actualPoints, Avg.Rank)  # For debugging
         ecr_df$TierECR = computeTiers(ecr_df$Avg.Rank, kTiers[pos])
     
         acc = computeAccuracy(pos_df$actualPoints, pos_df$TierProj)
@@ -412,13 +415,14 @@ does worse! It does better for RBs and WRs, but worse on QBs/TEs/Ks, and substan
 worse on Defense.
 
 ```{r bootstrap results}
-# set.seed(1); n1 = bootstrapCompare(1)  #  w
+set.seed(1); n1 = bootstrapCompare(1)  #  w
 # set.seed(1); n10 = bootstrapCompare(10)  # w
 # set.seed(1); n50 = bootstrapCompare(50)  # w
-# set.seed(1); n100 = bootstrapCompare(100)  #
+set.seed(1); n100 = bootstrapCompare(100)  #
 # set.seed(1); n200 = bootstrapCompare(200) # w
 # set.seed(1); n500 = bootstrapCompare(500) # w
-# set.seed(1); n1000 = bootstrapCompare(1000)
+set.seed(1); n1000 = bootstrapCompare(1000)
+set.seed(1); n10000 = bootstrapCompare(1000)
 
 # sapply(n1000, mean)
 #       QB        RB        WR        TE         K       DST 
